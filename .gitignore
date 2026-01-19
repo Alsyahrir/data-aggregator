@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+
+# Output files (optional)
+daily_aggregation_excel.csv
+oedi_daily_aggregation.csv
