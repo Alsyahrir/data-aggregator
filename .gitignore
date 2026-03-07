@@ -1,7 +1,9 @@
 __pycache__/
 *.pyc
+*.pyo
 .env
-
-# Output files (optional)
-daily_aggregation_excel.csv
-oedi_daily_aggregation.csv
+outputs/
+*.csv
+.DS_Store
+.vscode/
+.idea/
