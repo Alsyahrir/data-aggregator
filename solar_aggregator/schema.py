@@ -1,7 +1,3 @@
-"""
-Part 1: Schema Definition
-"""
-
 from dataclasses import dataclass
 from typing import Dict, List
 from enum import Enum

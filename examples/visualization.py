@@ -4,14 +4,17 @@ Example: Visualization Functions
 Creates useful charts for your solar panel data analysis.
 
 Requirements:
-    pip install matplotlib pandas openpyxl
+    pip install matplotlib pandas
 """
 
 import os
 import sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from solar_aggregator import SolarAggregator
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+os.chdir(ROOT)
+
+import pandas as pd
 from solar_aggregator.visualization import (
     plot_energy_production,
     plot_monthly_summary,
@@ -24,49 +27,32 @@ from solar_aggregator.visualization import (
 
 
 def main():
-    # Your data files
-    data_files = [
-        "Data/Excel/SolarPanel01.xlsx",
-        "Data/Excel/SolarPanel02.xlsx",
-    ]
-    
-    # Manual mapping for Bayan Lepas data
-    column_mapping = {
-        "Date": "timestamp",
-        "Value (Graph Scale : 1.000000 )": "energy"
-    }
-    
-    # Filter existing files
-    existing_files = [f for f in data_files if os.path.exists(f)]
-    
-    if not existing_files:
-        print("No data files found!")
+    # Your aggregated data file
+    data_file = "outputs/EXCEL/daily_aggregated.csv"
+
+    if not os.path.exists(data_file):
+        print(f"Data file not found: {data_file}")
         return
-    
-    # Load and aggregate data
+
     print("=" * 70)
     print("LOADING DATA")
     print("=" * 70)
-    
-    agg = SolarAggregator(verbose=True)
-    
-    for i, filepath in enumerate(existing_files, 1):
-        source_id = f"Panel{i:02d}"
-        agg.add_file(filepath, source_id=source_id, mapping=column_mapping)
-    
-    df_daily = agg.aggregate(freq="1D")
-    
-    # Create output folder
+
+    df_daily = pd.read_csv(data_file)
+    df_daily['timestamp'] = pd.to_datetime(df_daily['timestamp'])
+
+    print(f"Loaded {len(df_daily)} rows")
+    print(f"Columns: {df_daily.columns.tolist()}")
+    print(f"Panels: {df_daily['source_id'].unique().tolist()}")
+
     os.makedirs("outputs", exist_ok=True)
-    
-    # CREATE ALL CHARTS
+
     print("\n" + "=" * 70)
     print("CREATING VISUALIZATIONS")
     print("=" * 70)
-    
+
     create_all_charts(df_daily, output_folder="outputs")
-    
-    # SUMMARY
+
     print("\n" + "=" * 70)
     print("CHARTS CREATED")
     print("=" * 70)
@@ -78,8 +64,16 @@ def main():
 5. weekly_pattern.png     - Average by day of week
 6. distribution.png       - Energy distribution histogram
 """)
-    
-    print(agg.get_summary())
+
+    print("=" * 70)
+    print("SUMMARY")
+    print("=" * 70)
+    for panel in df_daily['source_id'].unique():
+        panel_data = df_daily[df_daily['source_id'] == panel]
+        total = panel_data['energy'].sum()
+        print(f"  {panel}: {total:,.2f} kWh")
+    print(f"  TOTAL: {df_daily['energy'].sum():,.2f} kWh")
+
     print("\nDone!")
 
 

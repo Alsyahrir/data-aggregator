@@ -1,12 +1,3 @@
-"""
-Part 5: LLM Integration (Groq)
-
-Setup:
-1. Get API key from https://console.groq.com
-2. pip install groq
-3. Use LLMAnalyzer with your API key
-"""
-
 import os
 import json
 import pandas as pd
@@ -206,27 +197,23 @@ REMEMBER: Only ONE column per schema field!"""
             mapping = file_analysis.column_mapping
             ignored = file_analysis.ignored_columns
             
-            # Find duplicates
             target_sources = {}
             for source, target in mapping.items():
                 if target not in target_sources:
                     target_sources[target] = []
                 target_sources[target].append(source)
-            
-            # Fix each duplicate
+
             for target, sources in target_sources.items():
                 if len(sources) > 1:
                     self._log(f"\nFixing duplicate '{target}': {sources}")
-                    
-                    # Choose best source
+
                     if target == "timestamp":
                         best = next((s for s in sources if s.lower() == "date"), sources[0])
                     elif target == "energy":
                         best = next((s for s in sources if "value" in s.lower() or "energy" in s.lower()), sources[0])
                     else:
                         best = sources[0]
-                    
-                    # Remove others
+
                     for s in sources:
                         if s != best:
                             del mapping[s]

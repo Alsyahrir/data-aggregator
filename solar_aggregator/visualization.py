@@ -1,9 +1,3 @@
-"""
-Part 6: Visualization Functions
-
-Charts for solar data analysis - optimized for daily data.
-"""
-
 import pandas as pd
 import numpy as np
 from typing import Optional
@@ -28,7 +22,6 @@ def plot_energy_production(df: pd.DataFrame, save_path: Optional[str] = None):
         source_df = df[df['source_id'] == source].sort_values('timestamp')
         # Filter out zero/null values for cleaner chart
         source_df = source_df[source_df['energy'] > 0]
-        
         color = colors.get(source, '#3498db')
         ax.plot(source_df['timestamp'], source_df['energy'], 
                label=source, alpha=0.8, linewidth=1.5, color=color)
@@ -42,8 +35,7 @@ def plot_energy_production(df: pd.DataFrame, save_path: Optional[str] = None):
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%b %Y'))
     ax.xaxis.set_major_locator(mdates.MonthLocator())
     plt.xticks(rotation=45)
-    
-    # Add total annotation
+
     total = df['energy'].sum()
     ax.annotate(f'Total: {total:,.0f} kWh', 
                xy=(0.98, 0.98), xycoords='axes fraction',
@@ -83,11 +75,9 @@ def plot_monthly_summary(df: pd.DataFrame, save_path: Optional[str] = None):
     ax.set_title('Monthly Energy Production by Panel', fontsize=14, fontweight='bold')
     ax.legend(title='Panel', fontsize=10)
     ax.grid(True, alpha=0.3, axis='y')
-    
-    # Format x-axis labels
+
     ax.set_xticklabels([str(x) for x in monthly.index], rotation=45, ha='right')
-    
-    # Add value labels on bars
+
     for container in ax.containers:
         ax.bar_label(container, fmt='%.0f', fontsize=8, rotation=90, padding=3)
     
@@ -119,13 +109,11 @@ def plot_panel_comparison(df: pd.DataFrame, save_path: Optional[str] = None):
     ax.set_ylabel('Panel', fontsize=12)
     ax.set_title('Total Energy Production by Panel', fontsize=14, fontweight='bold')
     ax.grid(True, alpha=0.3, axis='x')
-    
-    # Add value labels
+
     for bar, val in zip(bars, totals.values):
         ax.text(val + totals.max()*0.01, bar.get_y() + bar.get_height()/2,
                f'{val:,.0f} kWh', va='center', fontsize=11, fontweight='bold')
-    
-    # Add percentage labels
+
     total = totals.sum()
     for bar, val in zip(bars, totals.values):
         pct = val / total * 100
@@ -151,8 +139,7 @@ def plot_data_quality(df: pd.DataFrame, save_path: Optional[str] = None):
         return
     
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    # Left: Missing data by column
+
     ax1 = axes[0]
     null_pct = (df.isnull().sum() / len(df) * 100).sort_values(ascending=True)
     
@@ -169,10 +156,9 @@ def plot_data_quality(df: pd.DataFrame, save_path: Optional[str] = None):
         if pct > 0:
             ax1.text(pct + 2, bar.get_y() + bar.get_height()/2, 
                    f'{pct:.1f}%', va='center', fontsize=10)
-    
-    # Right: Data coverage by source
+
     ax2 = axes[1]
-    
+
     coverage = df.groupby('source_id').agg({
         'timestamp': ['min', 'max', 'count'],
         'energy': lambda x: x.notna().sum()
@@ -209,7 +195,7 @@ def plot_weekly_pattern(df: pd.DataFrame, save_path: Optional[str] = None):
         return
     
     df = df.copy()
-    df = df[df['energy'] > 0]  # Only valid readings
+    df = df[df['energy'] > 0]
     df['dayofweek'] = df['timestamp'].dt.dayofweek
     
     days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -250,8 +236,8 @@ def plot_distribution(df: pd.DataFrame, save_path: Optional[str] = None):
         print("matplotlib not installed")
         return
     
-    df = df[df['energy'] > 0].copy()  # Only valid readings
-    
+    df = df[df['energy'] > 0].copy()
+
     fig, ax = plt.subplots(figsize=(12, 6))
     
     colors = ['#2ecc71', '#e74c3c']
@@ -266,8 +252,7 @@ def plot_distribution(df: pd.DataFrame, save_path: Optional[str] = None):
     ax.set_title('Distribution of Daily Energy Production', fontsize=14, fontweight='bold')
     ax.legend()
     ax.grid(True, alpha=0.3, axis='y')
-    
-    # Add mean lines
+
     for i, source in enumerate(sorted(df['source_id'].unique())):
         source_df = df[df['source_id'] == source]
         mean_val = source_df['energy'].mean()

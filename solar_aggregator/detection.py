@@ -1,7 +1,3 @@
-"""
-Part 2: Column Detection
-"""
-
 import json
 import pandas as pd
 from typing import Dict, List, Tuple, Any

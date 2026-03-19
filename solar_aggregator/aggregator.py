@@ -1,7 +1,3 @@
-"""
-Part 4: Main Aggregator Class
-"""
-
 import os
 import pandas as pd
 from typing import Dict, List, Optional, Tuple
@@ -95,26 +91,23 @@ class SolarAggregator:
         self._log("AGGREGATION PIPELINE")
         self._log("=" * 60)
         
-        # Step 1: Merge
         self._log("\nStep 1: MERGING")
         self._log("-" * 40)
-        
+
         merged_list = []
         for inv_df in self._inverter_data:
             merged = merge_with_environment(inv_df, self._environment_data or None, self._irradiance_data)
             merged_list.append(merged)
-        
+
         self._merged_df = pd.concat(merged_list, ignore_index=True).sort_values(['timestamp', 'source_id'])
         self._log(f"  Total: {len(self._merged_df):,} rows")
-        
-        # Step 2: Align
+
         self._log(f"\nStep 2: ALIGNING to {align_freq}")
         self._log("-" * 40)
         self._aligned_df = align_timestamps(self._merged_df, freq=align_freq)
         self._log(f"  Before: {len(self._merged_df):,}")
         self._log(f"  After: {len(self._aligned_df):,}")
-        
-        # Step 3: Aggregate
+
         self._log(f"\nStep 3: AGGREGATING to {freq}")
         self._log("-" * 40)
         rules = get_aggregation_rules()
