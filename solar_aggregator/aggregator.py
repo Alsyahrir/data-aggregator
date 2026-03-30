@@ -19,7 +19,7 @@ class SolarAggregator:
         agg.save("output.csv")
     """
     
-    def __init__(self, verbose: bool = True):
+    def __init__(self, verbose: bool = False):
         self.verbose = verbose
         self._inverter_data: List[pd.DataFrame] = []
         self._environment_data: List[pd.DataFrame] = []

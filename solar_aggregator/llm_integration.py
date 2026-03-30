@@ -2,7 +2,7 @@ import os
 import json
 import pandas as pd
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 GROQ_AVAILABLE = False
 try:
@@ -10,6 +10,8 @@ try:
     GROQ_AVAILABLE = True
 except ImportError:
     Groq = None
+
+DATA_FIELDS = {"energy", "ambient_temp", "irradiance", "wind_speed", "module_temp", "humidity"}
 
 
 @dataclass
@@ -23,6 +25,7 @@ class FileAnalysis:
     confidence: str
     notes: str
     row_count: int
+    detection_method: str = "llm"  # "keyword" or "llm"
 
 
 @dataclass
@@ -36,8 +39,10 @@ class AnalysisResult:
 
 class LLMAnalyzer:
     """
-    Analyzes solar data files using Groq LLM.
-    
+    Analyzes solar data files using a two-tier detection strategy:
+      Tier 1 — Keyword pattern matching (fast, no API call)
+      Tier 2 — Groq LLM semantic analysis (fallback for ambiguous files)
+
     Usage:
         analyzer = LLMAnalyzer(api_key="your-key")
         analyzer.add_file("data.xlsx")
@@ -45,32 +50,31 @@ class LLMAnalyzer:
         agg = analyzer.create_aggregator()
         df = agg.aggregate(freq="1D")
     """
-    
-    def __init__(self, api_key: Optional[str] = None, verbose: bool = True):
+
+    def __init__(self, api_key: Optional[str] = None, verbose: bool = False):
         self.verbose = verbose
         self.files_info: List[Dict] = []
         self.filepaths: List[str] = []
+        self._df_samples: List[pd.DataFrame] = []
         self.analysis_result: Optional[AnalysisResult] = None
         self.api_key = api_key or os.environ.get('GROQ_API_KEY')
-        
+
         if not GROQ_AVAILABLE:
             self._log("Groq not installed. Run: pip install groq")
         elif self.api_key:
             self.client = Groq(api_key=self.api_key)
-            self._log("Groq API configured")
-    
+
     def _log(self, msg: str):
         if self.verbose:
             print(msg)
-    
+
     def add_file(self, filepath: str) -> 'LLMAnalyzer':
-        """Add file for analysis."""
+        """Add a file for analysis."""
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"File not found: {filepath}")
-        
+
         filename = os.path.basename(filepath)
-        self._log(f"\nScanning: {filename}")
-        
+
         if filepath.endswith('.csv'):
             df = pd.read_csv(filepath, nrows=10)
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -78,7 +82,7 @@ class LLMAnalyzer:
         else:
             df = pd.read_excel(filepath, nrows=10)
             row_count = len(pd.read_excel(filepath))
-        
+
         columns_info = []
         for col in df.columns:
             samples = df[col].dropna().head(2).tolist()
@@ -87,23 +91,76 @@ class LLMAnalyzer:
                 "dtype": str(df[col].dtype),
                 "samples": [str(v)[:50] for v in samples]
             })
-        
+
         self.files_info.append({
             "filename": filename,
             "row_count": row_count,
             "columns": columns_info
         })
         self.filepaths.append(filepath)
-        
-        self._log(f"  Columns: {len(df.columns)}")
-        self._log(f"  Rows: {row_count:,}")
-        
+        self._df_samples.append(df)
+
+        self._log(f"Scanned: {filename} ({row_count:,} rows, {len(df.columns)} columns)")
         return self
-    
-    def _build_prompt(self) -> str:
+
+    # ------------------------------------------------------------------
+    # Tier 1: keyword detection
+    # ------------------------------------------------------------------
+
+    def _try_keyword_detection(self, df: pd.DataFrame):
+        """Run keyword-based column detection. Returns (mapping, file_type)."""
+        from .detection import auto_detect_columns
+        return auto_detect_columns(df)
+
+    def _is_keyword_sufficient(self, mapping: Dict[str, str], file_type: str) -> bool:
+        """
+        Keyword result is sufficient if:
+          - timestamp is mapped
+          - at least one data field is mapped
+          - file type was identified (not "unknown")
+        If file_type is unknown, the column names are too non-standard for
+        keyword matching and the file should fall through to LLM.
+        """
+        mapped_targets = set(mapping.values())
+        return (
+            "timestamp" in mapped_targets
+            and bool(mapped_targets & DATA_FIELDS)
+            and file_type != "unknown"
+        )
+
+    def _keyword_to_file_analysis(self, file_info: Dict, filepath: str,
+                                   mapping: Dict[str, str], file_type: str) -> FileAnalysis:
+        """Build a FileAnalysis from keyword detection results."""
+        filename = file_info["filename"]
+        # Strip source_id from keyword mapping — it is always derived from filename
+        clean_mapping = {k: v for k, v in mapping.items() if v != "source_id"}
+        all_columns = [c["name"] for c in file_info["columns"]]
+        ignored = [c for c in all_columns if c not in clean_mapping]
+        source_id = (
+            filename.replace(".csv", "").replace(".xlsx", "")
+                    .replace("_data", "").upper()
+        )
+        return FileAnalysis(
+            filename=filename,
+            filepath=filepath,
+            file_type=file_type if file_type != "unknown" else "inverter",
+            source_id=source_id,
+            column_mapping=clean_mapping,
+            ignored_columns=ignored,
+            confidence="high",
+            notes="Resolved by keyword pattern matching",
+            row_count=file_info["row_count"],
+            detection_method="keyword",
+        )
+
+    # ------------------------------------------------------------------
+    # Tier 2: LLM detection
+    # ------------------------------------------------------------------
+
+    def _build_prompt(self, files_info: List[Dict]) -> str:
         return f"""You are a solar energy data expert.
 
-Map these {len(self.files_info)} files to this schema:
+Map these {len(files_info)} files to this schema:
 
 SCHEMA:
 - timestamp: Date/time (use "Date" column, NOT "Timestamp" if both exist)
@@ -117,7 +174,7 @@ CRITICAL RULES:
 4. Ignore: "Timestamp" (time only), "Parameter", "Meter reading", "Device Name"
 
 FILES:
-{json.dumps(self.files_info, indent=2)}
+{json.dumps(files_info, indent=2)}
 
 RESPOND WITH ONLY THIS JSON:
 {{
@@ -141,29 +198,14 @@ RESPOND WITH ONLY THIS JSON:
 }}
 
 REMEMBER: Only ONE column per schema field!"""
-    
-    def analyze(self) -> AnalysisResult:
-        """Analyze files with Groq LLM."""
-        if not self.files_info:
-            raise ValueError("No files. Use add_file() first.")
-        if not GROQ_AVAILABLE:
-            raise ImportError("Run: pip install groq")
-        if not self.api_key:
-            raise ValueError("No API key. Get from https://console.groq.com")
-        
-        self._log("\n" + "=" * 60)
-        self._log("ANALYZING WITH GROQ LLM")
-        self._log("=" * 60)
-        
-        prompt = self._build_prompt()
-        self._log(f"\nSending {len(self.files_info)} files to Groq...")
-        
+
+    def _call_llm(self, files_info: List[Dict]) -> str:
+        """Send files_info to Groq and return raw response text."""
+        prompt = self._build_prompt(files_info)
         models = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768']
-        response_text = None
-        
+
         for model in models:
             try:
-                self._log(f"Trying model: {model}...")
                 response = self.client.chat.completions.create(
                     model=model,
                     messages=[
@@ -173,74 +215,31 @@ REMEMBER: Only ONE column per schema field!"""
                     temperature=0.1,
                     max_tokens=2000,
                 )
-                response_text = response.choices[0].message.content
-                self._log(f"Success with {model}")
-                break
+                return response.choices[0].message.content
             except Exception as e:
-                self._log(f"  {model}: {str(e)[:50]}")
-        
-        if response_text is None:
-            raise RuntimeError("All models failed")
-        
-        self._log("Response received")
-        self.analysis_result = self._parse_response(response_text)
-        self._fix_duplicate_mappings()
-        
-        return self.analysis_result
-    
-    def _fix_duplicate_mappings(self):
-        """Fix duplicate column mappings."""
-        if not self.analysis_result:
-            return
-        
-        for file_analysis in self.analysis_result.files:
-            mapping = file_analysis.column_mapping
-            ignored = file_analysis.ignored_columns
-            
-            target_sources = {}
-            for source, target in mapping.items():
-                if target not in target_sources:
-                    target_sources[target] = []
-                target_sources[target].append(source)
+                self._log(f"  {model} failed: {str(e)[:60]}")
 
-            for target, sources in target_sources.items():
-                if len(sources) > 1:
-                    self._log(f"\nFixing duplicate '{target}': {sources}")
+        raise RuntimeError("All Groq models failed")
 
-                    if target == "timestamp":
-                        best = next((s for s in sources if s.lower() == "date"), sources[0])
-                    elif target == "energy":
-                        best = next((s for s in sources if "value" in s.lower() or "energy" in s.lower()), sources[0])
-                    else:
-                        best = sources[0]
-
-                    for s in sources:
-                        if s != best:
-                            del mapping[s]
-                            if s not in ignored:
-                                ignored.append(s)
-                            self._log(f"  Removed: '{s}'")
-                    self._log(f"  Kept: '{best}'")
-    
-    def _parse_response(self, response_text: str) -> AnalysisResult:
-        """Parse LLM JSON response."""
+    def _parse_llm_response(self, response_text: str, filepaths: List[str],
+                             files_info: List[Dict]) -> List[FileAnalysis]:
+        """Parse LLM JSON response into a list of FileAnalysis objects."""
         text = response_text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0]
         elif "```" in text:
             text = text.split("```")[1].split("```")[0]
-        
-        start = text.find("{")
-        end = text.rfind("}") + 1
+
+        start, end = text.find("{"), text.rfind("}") + 1
         if start == -1:
-            raise ValueError(f"No JSON found: {response_text[:200]}")
-        
+            raise ValueError(f"No JSON in LLM response: {response_text[:200]}")
+
         data = json.loads(text[start:end])
-        
-        files = []
+        results = []
         for i, f in enumerate(data.get("files", [])):
-            filepath = self.filepaths[i] if i < len(self.filepaths) else ""
-            files.append(FileAnalysis(
+            filepath = filepaths[i] if i < len(filepaths) else ""
+            info = files_info[i] if i < len(files_info) else {}
+            results.append(FileAnalysis(
                 filename=f.get("filename", ""),
                 filepath=filepath,
                 file_type=f.get("file_type", "unknown"),
@@ -249,27 +248,113 @@ REMEMBER: Only ONE column per schema field!"""
                 ignored_columns=f.get("ignored_columns", []),
                 confidence=f.get("confidence", "medium"),
                 notes=f.get("notes", ""),
-                row_count=self.files_info[i]["row_count"] if i < len(self.files_info) else 0
+                row_count=info.get("row_count", 0),
+                detection_method="llm",
             ))
-        
-        return AnalysisResult(
-            summary=data.get("analysis_summary", ""),
-            files=files,
-            merge_strategy=data.get("merge_strategy", ""),
-            warnings=data.get("warnings", []),
-            raw_response=response_text
+        return results
+
+    def _fix_duplicate_mappings(self, file_analyses: List[FileAnalysis]):
+        """Remove duplicate column→target mappings, keeping the best source."""
+        for fa in file_analyses:
+            mapping, ignored = fa.column_mapping, fa.ignored_columns
+            target_sources: Dict[str, List[str]] = {}
+            for src, tgt in mapping.items():
+                target_sources.setdefault(tgt, []).append(src)
+
+            for target, sources in target_sources.items():
+                if len(sources) <= 1:
+                    continue
+                if target == "timestamp":
+                    best = next((s for s in sources if s.lower() == "date"), sources[0])
+                elif target == "energy":
+                    best = next((s for s in sources if "value" in s.lower() or "energy" in s.lower()), sources[0])
+                else:
+                    best = sources[0]
+                for s in sources:
+                    if s != best:
+                        del mapping[s]
+                        if s not in ignored:
+                            ignored.append(s)
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def analyze(self) -> AnalysisResult:
+        """
+        Run two-tier analysis:
+          1. Keyword pattern matching for each file
+          2. LLM semantic analysis for files that keyword matching couldn't resolve
+        """
+        if not self.files_info:
+            raise ValueError("No files added. Call add_file() first.")
+
+        resolved: Dict[int, FileAnalysis] = {}
+        llm_indices: List[int] = []
+
+        # Tier 1: keyword detection
+        for i, (file_info, filepath, df) in enumerate(
+                zip(self.files_info, self.filepaths, self._df_samples)):
+            mapping, file_type = self._try_keyword_detection(df)
+            if self._is_keyword_sufficient(mapping, file_type):
+                resolved[i] = self._keyword_to_file_analysis(file_info, filepath, mapping, file_type)
+                self._log(f"[Tier 1] {file_info['filename']}: resolved by keyword matching")
+            else:
+                llm_indices.append(i)
+                self._log(f"[Tier 2] {file_info['filename']}: ambiguous, sending to LLM")
+
+        # Tier 2: LLM for ambiguous files
+        if llm_indices:
+            if not GROQ_AVAILABLE:
+                raise ImportError("groq package required. Run: pip install groq")
+            if not self.api_key:
+                raise ValueError("No API key for Groq LLM. Get one at https://console.groq.com")
+
+            llm_files_info = [self.files_info[i] for i in llm_indices]
+            llm_filepaths = [self.filepaths[i] for i in llm_indices]
+
+            response_text = self._call_llm(llm_files_info)
+            llm_results = self._parse_llm_response(response_text, llm_filepaths, llm_files_info)
+
+            for idx, fa in zip(llm_indices, llm_results):
+                resolved[idx] = fa
+
+        # Assemble in original file order
+        all_files = [resolved[i] for i in range(len(self.files_info))]
+        self._fix_duplicate_mappings(all_files)
+
+        keyword_count = sum(1 for fa in all_files if fa.detection_method == "keyword")
+        llm_count = len(all_files) - keyword_count
+        summary_parts = []
+        if keyword_count:
+            summary_parts.append(f"{keyword_count} file(s) via keyword matching")
+        if llm_count:
+            summary_parts.append(f"{llm_count} file(s) via LLM")
+        summary = "Mapped " + ", ".join(summary_parts)
+
+        self.analysis_result = AnalysisResult(
+            summary=summary,
+            files=all_files,
+            merge_strategy="Concatenate by source_id",
+            warnings=[],
+            raw_response="",
         )
-    
+        return self.analysis_result
+
     def get_analysis_summary(self) -> str:
-        """Get formatted summary."""
+        """Return a formatted summary of the analysis results."""
         if not self.analysis_result:
             return "No analysis yet. Call analyze() first."
-        
+
         r = self.analysis_result
-        lines = ["", "=" * 70, "LLM ANALYSIS RESULTS", "=" * 70, "", f"Summary: {r.summary}", "", "FILES:", "-" * 50]
-        
+        lines = [
+            "", "=" * 70, "LLM ANALYSIS RESULTS", "=" * 70,
+            "", f"Summary: {r.summary}", "", "FILES:", "-" * 50,
+        ]
+
         for f in r.files:
             lines.append(f"\n{f.filename}")
+            lines.append(f"   Detection: {f.detection_method.upper()}")
             lines.append(f"   Type: {f.file_type}")
             lines.append(f"   Source ID: {f.source_id}")
             lines.append(f"   Rows: {f.row_count:,}")
@@ -278,44 +363,39 @@ REMEMBER: Only ONE column per schema field!"""
                 lines.append(f"      '{orig}' -> {schema}")
             if f.ignored_columns:
                 lines.append(f"   Ignored: {', '.join(f.ignored_columns)}")
-        
+
         lines.extend(["", "-" * 50, f"Merge Strategy: {r.merge_strategy}"])
         if r.warnings:
             lines.append("\nWARNINGS:")
             for w in r.warnings:
                 lines.append(f"   - {w}")
         lines.append("=" * 70)
-        
+
         return "\n".join(lines)
-    
+
     def create_aggregator(self) -> 'SolarAggregator':
-        """Create aggregator from LLM analysis."""
+        """Create a SolarAggregator from the analysis results."""
         if not self.analysis_result:
             raise ValueError("No analysis. Call analyze() first.")
-        
+
         from .aggregator import SolarAggregator
-        
-        self._log("\n" + "=" * 60)
-        self._log("CREATING AGGREGATOR FROM LLM ANALYSIS")
-        self._log("=" * 60)
-        
         agg = SolarAggregator(verbose=self.verbose)
-        
+
         for f in self.analysis_result.files:
-            self._log(f"\nAdding {f.filename} as {f.file_type}...")
             agg.add_file(filepath=f.filepath, source_id=f.source_id, mapping=f.column_mapping)
-        
+
         return agg
 
 
-def analyze_and_aggregate(files: List[str], api_key: str, freq: str = "1D", output: Optional[str] = None) -> pd.DataFrame:
+def analyze_and_aggregate(files: List[str], api_key: str, freq: str = "1D",
+                           output: Optional[str] = None) -> pd.DataFrame:
     """One-liner: analyze and aggregate."""
     analyzer = LLMAnalyzer(api_key=api_key)
     for f in files:
         analyzer.add_file(f)
     analyzer.analyze()
     print(analyzer.get_analysis_summary())
-    
+
     agg = analyzer.create_aggregator()
     df = agg.aggregate(freq=freq)
     if output:
@@ -325,8 +405,8 @@ def analyze_and_aggregate(files: List[str], api_key: str, freq: str = "1D", outp
 
 
 def get_prompt_for_manual_llm(files: List[str]) -> str:
-    """Get prompt to copy-paste to ChatGPT/Claude."""
+    """Get the prompt that would be sent to the LLM, for manual copy-paste."""
     analyzer = LLMAnalyzer(api_key=None, verbose=False)
     for f in files:
         analyzer.add_file(f)
-    return analyzer._build_prompt()
+    return analyzer._build_prompt(analyzer.files_info)
