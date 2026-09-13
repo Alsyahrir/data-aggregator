@@ -7,3 +7,5 @@ outputs/
 .DS_Store
 .vscode/
 .idea/
+app.py
+.streamlit/
