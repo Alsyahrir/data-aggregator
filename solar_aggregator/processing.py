@@ -1,9 +1,27 @@
 import os
+import logging
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 
 from .schema import SCHEMA, get_aggregation_rules
+
+logger = logging.getLogger(__name__)
+
+
+# ── Reasonable physical bounds for solar data ────────────────────────────────
+
+PHYSICAL_BOUNDS = {
+    "energy":       (0, 100_000),  # kWh per period
+    "irradiance":   (0, 1500),     # W/m²
+    "ambient_temp": (-40, 60),     # °C
+    "module_temp":  (-40, 100),    # °C
+    "humidity":     (0, 100),      # %
+    "wind_speed":   (0, 100),      # m/s
+    "power":        (0, 1_000_000),# W
+    "voltage":      (0, 2000),     # V
+    "current":      (0, 5000),     # A
+}
 
 
 def load_file(filepath: str) -> pd.DataFrame:
@@ -134,25 +152,196 @@ def aggregate_to_period(df: pd.DataFrame, freq: str = '1D') -> pd.DataFrame:
     return df_agg[cols]
 
 
-def validate_dataframe(df: pd.DataFrame) -> Tuple[bool, List[str]]:
-    """Validate a DataFrame against the schema."""
-    errors = []
-    
+def validate_dataframe(df: pd.DataFrame) -> Tuple[bool, List[Dict[str, str]]]:
+    """Validate a DataFrame against the schema.
+
+    Returns (is_valid, issues) where each issue is a dict with
+    keys: 'severity' ('error' | 'warning'), 'message'.
+    """
+    issues: List[Dict[str, str]] = []
+
+    def _err(msg: str):
+        issues.append({"severity": "error", "message": msg})
+
+    def _warn(msg: str):
+        issues.append({"severity": "warning", "message": msg})
+
+    # Required columns
     required = [name for name, field in SCHEMA.items() if field.required]
     for col in required:
         if col not in df.columns:
-            errors.append(f"Missing required column: {col}")
-    
+            _err(f"Missing required column: {col}")
+
+    # Timestamp checks
     if 'timestamp' in df.columns:
         if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
-            errors.append("'timestamp' is not datetime type")
+            _err("'timestamp' is not datetime type")
         null_ts = df['timestamp'].isna().sum()
         if null_ts > 0:
-            errors.append(f"Found {null_ts} null timestamps")
-    
+            _err(f"Found {null_ts} null timestamps")
+
+        # Check for large time gaps
+        if 'source_id' in df.columns:
+            for src in df['source_id'].unique():
+                src_df = df[df['source_id'] == src].sort_values('timestamp')
+                if len(src_df) > 1:
+                    gaps = src_df['timestamp'].diff().dt.days
+                    large_gaps = gaps[gaps > 7]
+                    if len(large_gaps) > 0:
+                        _warn(f"Source '{src}': {len(large_gaps)} gap(s) > 7 days found")
+
+        # Check for duplicate timestamps per source
+        if 'source_id' in df.columns:
+            dupes = df.groupby('source_id')['timestamp'].apply(
+                lambda ts: ts.duplicated().sum()
+            )
+            for src, count in dupes.items():
+                if count > 0:
+                    _warn(f"Source '{src}': {count} duplicate timestamp(s)")
+
+    # Energy checks
     if 'energy' in df.columns:
         neg = (df['energy'] < 0).sum()
         if neg > 0:
-            errors.append(f"Found {neg} negative energy values")
-    
-    return len(errors) == 0, errors
+            _err(f"Found {neg} negative energy values")
+
+    # Physical bounds checks
+    for col, (lo, hi) in PHYSICAL_BOUNDS.items():
+        if col in df.columns:
+            out_of_range = ((df[col] < lo) | (df[col] > hi)).sum()
+            if out_of_range > 0:
+                _warn(
+                    f"'{col}': {out_of_range} value(s) outside expected range "
+                    f"[{lo}, {hi}] {SCHEMA.get(col, None) and SCHEMA[col].unit or ''}"
+                )
+
+    has_errors = any(i['severity'] == 'error' for i in issues)
+    return not has_errors, issues
+
+
+# ── Anomaly Detection ─────────────────────────────────────────────────────────
+
+def detect_anomalies(
+    df: pd.DataFrame,
+    columns: Optional[List[str]] = None,
+    method: str = "iqr",
+    iqr_factor: float = 1.5,
+    z_threshold: float = 3.0,
+) -> pd.DataFrame:
+    """Detect anomalies in numeric columns.
+
+    Args:
+        df: Input DataFrame.
+        columns: Columns to check. Defaults to all numeric schema fields present.
+        method: 'iqr' (Interquartile Range) or 'zscore'.
+        iqr_factor: Multiplier for IQR bounds (default 1.5).
+        z_threshold: Z-score threshold (default 3.0).
+
+    Returns:
+        A copy of df with boolean `is_anomaly` column and per-column
+        anomaly flag columns named `_anomaly_{col}`.
+    """
+    df = df.copy()
+    target_cols = columns or [
+        c for c in df.columns
+        if c in SCHEMA and pd.api.types.is_numeric_dtype(df[c])
+    ]
+
+    anomaly_mask = pd.Series(False, index=df.index)
+
+    for col in target_cols:
+        series = df[col].dropna()
+        if len(series) < 10:
+            df[f"_anomaly_{col}"] = False
+            continue
+
+        if method == "iqr":
+            q1 = series.quantile(0.25)
+            q3 = series.quantile(0.75)
+            iqr = q3 - q1
+            lower = q1 - iqr_factor * iqr
+            upper = q3 + iqr_factor * iqr
+            col_anomaly = (df[col] < lower) | (df[col] > upper)
+        elif method == "zscore":
+            mean = series.mean()
+            std = series.std()
+            if std == 0:
+                col_anomaly = pd.Series(False, index=df.index)
+            else:
+                col_anomaly = ((df[col] - mean).abs() / std) > z_threshold
+        else:
+            raise ValueError(f"Unknown method: {method}. Use 'iqr' or 'zscore'.")
+
+        # Also flag values outside physical bounds
+        if col in PHYSICAL_BOUNDS:
+            lo, hi = PHYSICAL_BOUNDS[col]
+            col_anomaly = col_anomaly | (df[col] < lo) | (df[col] > hi)
+
+        col_anomaly = col_anomaly.fillna(False)
+        df[f"_anomaly_{col}"] = col_anomaly
+        anomaly_mask = anomaly_mask | col_anomaly
+
+    df["is_anomaly"] = anomaly_mask
+    n_anomalies = anomaly_mask.sum()
+    logger.info(
+        "Anomaly detection (%s): %d / %d rows flagged (%.1f%%)",
+        method, n_anomalies, len(df),
+        n_anomalies / len(df) * 100 if len(df) > 0 else 0,
+    )
+    return df
+
+
+def auto_clean(
+    df: pd.DataFrame,
+    strategy: str = "flag",
+    columns: Optional[List[str]] = None,
+    method: str = "iqr",
+    iqr_factor: float = 1.5,
+) -> pd.DataFrame:
+    """Detect anomalies and optionally clean them.
+
+    Args:
+        df: Input DataFrame.
+        strategy:
+            'flag'  — add is_anomaly column, keep all rows (default).
+            'drop'  — remove anomalous rows.
+            'clip'  — clip values to IQR bounds.
+        columns: Columns to check.
+        method: Detection method ('iqr' or 'zscore').
+        iqr_factor: IQR multiplier.
+
+    Returns:
+        Cleaned DataFrame.
+    """
+    df = detect_anomalies(df, columns=columns, method=method, iqr_factor=iqr_factor)
+
+    if strategy == "flag":
+        return df
+    elif strategy == "drop":
+        before = len(df)
+        df = df[~df["is_anomaly"]].copy()
+        logger.info("auto_clean(drop): removed %d rows", before - len(df))
+        # Drop anomaly columns
+        df = df.drop(columns=[c for c in df.columns if c.startswith("_anomaly_") or c == "is_anomaly"])
+        return df
+    elif strategy == "clip":
+        target_cols = columns or [
+            c for c in df.columns
+            if c in SCHEMA and pd.api.types.is_numeric_dtype(df[c])
+        ]
+        for col in target_cols:
+            series = df[col].dropna()
+            if len(series) < 10:
+                continue
+            q1 = series.quantile(0.25)
+            q3 = series.quantile(0.75)
+            iqr = q3 - q1
+            lower = q1 - iqr_factor * iqr
+            upper = q3 + iqr_factor * iqr
+            df[col] = df[col].clip(lower=lower, upper=upper)
+        logger.info("auto_clean(clip): clipped values to IQR bounds")
+        # Drop anomaly columns
+        df = df.drop(columns=[c for c in df.columns if c.startswith("_anomaly_") or c == "is_anomaly"])
+        return df
+    else:
+        raise ValueError(f"Unknown strategy: {strategy}. Use 'flag', 'drop', or 'clip'.")

@@ -1,6 +1,9 @@
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 from enum import Enum
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class AggregationMethod(Enum):
@@ -84,7 +87,77 @@ SCHEMA: Dict[str, SchemaField] = {
         description="Relative humidity",
         unit="%"
     ),
+    "power": SchemaField(
+        name="power",
+        required=False,
+        aggregation=AggregationMethod.MEAN,
+        keywords=["power", "ac_power", "dc_power", "active_power", "watt"],
+        description="Power output",
+        unit="W"
+    ),
+    "voltage": SchemaField(
+        name="voltage",
+        required=False,
+        aggregation=AggregationMethod.MEAN,
+        keywords=["voltage", "dc_voltage", "ac_voltage", "vdc", "vac"],
+        description="Voltage",
+        unit="V"
+    ),
+    "current": SchemaField(
+        name="current",
+        required=False,
+        aggregation=AggregationMethod.MEAN,
+        keywords=["current", "dc_current", "ac_current", "ampere"],
+        description="Current",
+        unit="A"
+    ),
 }
+
+
+# ── Custom Exceptions ────────────────────────────────────────────────────────
+
+class SolarAggregatorError(Exception):
+    """Base exception for the solar aggregator library."""
+
+class SchemaValidationError(SolarAggregatorError):
+    """Raised when data fails schema validation."""
+
+class DetectionError(SolarAggregatorError):
+    """Raised when column detection fails."""
+
+class AggregationError(SolarAggregatorError):
+    """Raised when aggregation fails."""
+
+class WeatherEnrichmentError(SolarAggregatorError):
+    """Raised when weather data enrichment fails."""
+
+
+# ── Schema Extension API ─────────────────────────────────────────────────────
+
+def register_field(
+    name: str,
+    required: bool = False,
+    aggregation: AggregationMethod = AggregationMethod.MEAN,
+    keywords: Optional[List[str]] = None,
+    description: str = "",
+    unit: str = "",
+) -> SchemaField:
+    """Register a custom field in the schema.
+
+    Example:
+        register_field("efficiency", keywords=["eff", "eta"], unit="%")
+    """
+    field = SchemaField(
+        name=name,
+        required=required,
+        aggregation=aggregation,
+        keywords=keywords or [name],
+        description=description or f"Custom field: {name}",
+        unit=unit,
+    )
+    SCHEMA[name] = field
+    logger.info("Registered custom schema field: %s", name)
+    return field
 
 
 def get_aggregation_rules() -> Dict[str, str]:
