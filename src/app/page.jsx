@@ -33,6 +33,20 @@ import {
 } from 'chart.js';
 import { Line, Bar } from 'react-chartjs-2';
 
+// xlsx/papaparse are only needed for the large-file client-side pre-processing
+// path, so they're loaded on demand (see loadFileProcessing below) instead of
+// bundled into every page load — they add well over 100KB otherwise.
+let fileProcessingModule = null;
+function loadFileProcessing() {
+  if (!fileProcessingModule) {
+    fileProcessingModule = import('../lib/fileProcessing');
+  }
+  return fileProcessingModule;
+}
+
+// Thresholds are tiny constants (no heavy deps), safe to import eagerly.
+import { FILE_PROCESSING_THRESHOLDS } from '../lib/fileProcessingConstants';
+
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -141,8 +155,19 @@ export default function SolsticePage() {
     setErrorMsg('');
 
     try {
+      // /api/detect only needs a header + a few sample rows to guess column
+      // mappings, so large files are sampled down in the browser first —
+      // this keeps the request well under the server's size limit no
+      // matter how big the original file is.
       const formData = new FormData();
-      files.forEach((f) => formData.append('files', f));
+      const needsSampling = files.some((f) => f.size > FILE_PROCESSING_THRESHOLDS.detectSampleBytes);
+      const sampledFiles = needsSampling
+        ? await (async () => {
+            const { sampleFileForDetection } = await loadFileProcessing();
+            return Promise.all(files.map((f) => sampleFileForDetection(f)));
+          })()
+        : files;
+      sampledFiles.forEach((f) => formData.append('files', f));
       if (groqKey.trim()) {
         formData.append('groq_api_key', groqKey.trim());
       }
@@ -194,14 +219,33 @@ export default function SolsticePage() {
       return;
     }
 
+    const hasLargeFiles = uploadedFiles.some((f) => f.size > FILE_PROCESSING_THRESHOLDS.processPreAggBytes);
+
     setLoading(true);
-    setLoadingMsg('Merging streams, aligning timestamps & evaluating anomalies...');
+    setLoadingMsg(
+      hasLargeFiles
+        ? 'Pre-aggregating large file(s) locally in your browser (keeps the upload under the server limit), then merging & evaluating anomalies...'
+        : 'Merging streams, aligning timestamps & evaluating anomalies...'
+    );
     setErrorMsg('');
 
     try {
+      // Files over the size threshold can't be uploaded whole (server request
+      // limit), so they're aggregated to the target frequency client-side
+      // first, using the same SUM/MEAN rules the server would apply. Their
+      // mapping becomes an identity map since columns are already renamed.
       const formData = new FormData();
-      uploadedFiles.forEach((f) => formData.append('files', f));
-      formData.append('mappings_json', JSON.stringify(mappings));
+      const finalMappings = {};
+      const { prepareFileForProcessing } = hasLargeFiles
+        ? await loadFileProcessing()
+        : { prepareFileForProcessing: async (f, m) => ({ file: f, mapping: m }) };
+      for (const f of uploadedFiles) {
+        const originalMapping = mappings[f.name] || {};
+        const { file: uploadFile, mapping: uploadMapping } = await prepareFileForProcessing(f, originalMapping, freq);
+        formData.append('files', uploadFile);
+        finalMappings[uploadFile.name] = uploadMapping;
+      }
+      formData.append('mappings_json', JSON.stringify(finalMappings));
       formData.append('freq', freq);
       formData.append('anomaly_enabled', String(anomalyEnabled));
       formData.append('anomaly_method', anomalyMethod);
@@ -638,7 +682,10 @@ export default function SolsticePage() {
                 </div>
               )}
 
-              {detectionResults.map((f) => (
+              {detectionResults.map((f) => {
+                const originalFile = uploadedFiles.find((u) => u.name === f.filename);
+                const isLargeFile = originalFile && originalFile.size > FILE_PROCESSING_THRESHOLDS.processPreAggBytes;
+                return (
                 <div key={f.filename} className="file-card">
                   <div className="file-header">
                     <div className="file-info">
@@ -648,6 +695,14 @@ export default function SolsticePage() {
                       <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                         {f.row_count.toLocaleString()} rows • Confidence: {f.confidence}
                       </span>
+                      {isLargeFile && (
+                        <span
+                          title="This file is large enough that it will be aggregated locally in your browser to the chosen frequency before upload, to stay under the server's request size limit."
+                          style={{ fontSize: '0.78rem', color: '#5ea3db', display: 'flex', alignItems: 'center', gap: '4px' }}
+                        >
+                          <Sparkles size={13} /> {(originalFile.size / (1024 * 1024)).toFixed(1)} MB — will be pre-aggregated locally before upload
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -676,7 +731,8 @@ export default function SolsticePage() {
                     })}
                   </div>
                 </div>
-              ))}
+                );
+              })}
 
               <div style={{ textAlign: 'right', marginTop: '1rem' }}>
                 <button
