@@ -8,4 +8,5 @@ numpy>=1.24.0
 scikit-learn>=1.3.0
 openpyxl>=3.1.0
 python-multipart>=0.0.9
-groq>=0.4.0
+openai>=1.0.0
+# ^ powers GroqProvider too — Groq's API is OpenAI-compatible (see solstice/llm_providers.py)
