@@ -1,7 +1,7 @@
-"""Tests for solar_aggregator.schema module."""
+"""Tests for solstice.schema module."""
 
 import pytest
-from solar_aggregator.schema import (
+from solstice.schema import (
     SCHEMA, SchemaField, AggregationMethod,
     get_aggregation_rules, get_required_fields, get_optional_fields,
     register_field,

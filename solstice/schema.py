@@ -116,19 +116,19 @@ SCHEMA: Dict[str, SchemaField] = {
 
 # ── Custom Exceptions ────────────────────────────────────────────────────────
 
-class SolarAggregatorError(Exception):
-    """Base exception for the solar aggregator library."""
+class SolsticeError(Exception):
+    """Base exception for the Solstice library."""
 
-class SchemaValidationError(SolarAggregatorError):
+class SchemaValidationError(SolsticeError):
     """Raised when data fails schema validation."""
 
-class DetectionError(SolarAggregatorError):
+class DetectionError(SolsticeError):
     """Raised when column detection fails."""
 
-class AggregationError(SolarAggregatorError):
+class AggregationError(SolsticeError):
     """Raised when aggregation fails."""
 
-class WeatherEnrichmentError(SolarAggregatorError):
+class WeatherEnrichmentError(SolsticeError):
     """Raised when weather data enrichment fails."""
 
 
@@ -178,7 +178,7 @@ def get_optional_fields() -> List[str]:
 
 def print_schema():
     print("=" * 70)
-    print("SOLAR DATA AGGREGATOR - STANDARD SCHEMA")
+    print("SOLSTICE - STANDARD SCHEMA")
     print("=" * 70)
     print("\nREQUIRED FIELDS:")
     print("-" * 40)

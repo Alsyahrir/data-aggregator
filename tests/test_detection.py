@@ -1,8 +1,8 @@
-"""Tests for solar_aggregator.detection module."""
+"""Tests for solstice.detection module."""
 
 import pytest
 import pandas as pd
-from solar_aggregator.detection import auto_detect_columns
+from solstice.detection import auto_detect_columns
 
 
 class TestAutoDetectColumns:

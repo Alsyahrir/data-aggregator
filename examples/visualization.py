@@ -15,7 +15,7 @@ sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
 import pandas as pd
-from solar_aggregator.visualization import (
+from solstice.visualization import (
     plot_energy_production,
     plot_monthly_summary,
     plot_panel_comparison,

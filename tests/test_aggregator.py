@@ -1,4 +1,4 @@
-"""End-to-end tests for the SolarAggregator pipeline."""
+"""End-to-end tests for the Solstice aggregation pipeline."""
 
 import pytest
 import pandas as pd
@@ -6,7 +6,7 @@ import numpy as np
 import tempfile
 import os
 
-from solar_aggregator import SolarAggregator
+from solstice import Solstice
 
 
 @pytest.fixture
@@ -37,14 +37,14 @@ def environment_csv(tmp_path):
     return str(csv_path)
 
 
-class TestSolarAggregator:
+class TestSolstice:
     """End-to-end aggregation tests."""
 
     def test_single_file_aggregation(self, inverter_csv):
-        agg = SolarAggregator()
+        agg = Solstice()
         agg.add_file(inverter_csv)
         result = agg.aggregate(freq="1D")
-        
+
         assert isinstance(result, pd.DataFrame)
         assert "timestamp" in result.columns
         assert "energy" in result.columns
@@ -52,7 +52,7 @@ class TestSolarAggregator:
         assert len(result) > 0
 
     def test_multiple_files(self, inverter_csv, environment_csv):
-        agg = SolarAggregator()
+        agg = Solstice()
         agg.add_file(inverter_csv)
         agg.add_file(environment_csv)
         result = agg.aggregate(freq="1D")
@@ -61,7 +61,7 @@ class TestSolarAggregator:
         assert "energy" in result.columns
 
     def test_custom_mapping(self, inverter_csv):
-        agg = SolarAggregator()
+        agg = Solstice()
         mapping = {"Date": "timestamp", "Energy_kWh": "energy"}
         agg.add_file(inverter_csv, source_id="MY_PANEL", mapping=mapping)
         result = agg.aggregate(freq="1D")
@@ -69,7 +69,7 @@ class TestSolarAggregator:
         assert "MY_PANEL" in result["source_id"].values
 
     def test_weekly_aggregation(self, inverter_csv):
-        agg = SolarAggregator()
+        agg = Solstice()
         agg.add_file(inverter_csv)
         result = agg.aggregate(freq="1W")
         
@@ -78,7 +78,7 @@ class TestSolarAggregator:
         assert len(result) <= len(daily)
 
     def test_save_csv(self, inverter_csv, tmp_path):
-        agg = SolarAggregator()
+        agg = Solstice()
         agg.add_file(inverter_csv)
         agg.aggregate(freq="1D")
         
@@ -90,7 +90,7 @@ class TestSolarAggregator:
         assert len(loaded) > 0
 
     def test_get_summary(self, inverter_csv):
-        agg = SolarAggregator()
+        agg = Solstice()
         agg.add_file(inverter_csv)
         agg.aggregate(freq="1D")
         
@@ -99,7 +99,7 @@ class TestSolarAggregator:
         assert "kWh" in summary
 
     def test_get_dataframe_types(self, inverter_csv):
-        agg = SolarAggregator()
+        agg = Solstice()
         agg.add_file(inverter_csv)
         agg.aggregate(freq="1D")
         
@@ -110,12 +110,12 @@ class TestSolarAggregator:
         assert merged_df is not None
 
     def test_no_data_raises(self):
-        agg = SolarAggregator()
+        agg = Solstice()
         with pytest.raises(ValueError, match="No inverter data"):
             agg.aggregate()
 
     def test_chaining(self, inverter_csv):
         """Test fluent API chaining."""
-        agg = SolarAggregator()
+        agg = Solstice()
         result = agg.add_file(inverter_csv)
         assert result is agg  # add_file returns self

@@ -7,12 +7,12 @@ from .detection import auto_detect_columns, generate_llm_prompt, parse_llm_respo
 from .processing import load_file, standardise_dataframe, merge_with_environment, align_timestamps, aggregate_to_period, validate_dataframe
 
 
-class SolarAggregator:
+class Solstice:
     """
     Main class for solar data aggregation.
-    
+
     Usage:
-        agg = SolarAggregator()
+        agg = Solstice()
         agg.add_file("inverter1.csv")
         agg.add_file("weather.csv")
         df = agg.aggregate(freq="1D")
@@ -39,7 +39,7 @@ class SolarAggregator:
         self._aligned_df = None
         self._aggregated_df = None
     
-    def add_file(self, filepath: str, source_id: Optional[str] = None, mapping: Optional[Dict[str, str]] = None) -> 'SolarAggregator':
+    def add_file(self, filepath: str, source_id: Optional[str] = None, mapping: Optional[Dict[str, str]] = None) -> 'Solstice':
         """Add a data file."""
         filename = os.path.basename(filepath)
         self._log(f"\nAdding: {filename}")
@@ -184,7 +184,7 @@ class SolarAggregator:
 
 def quick_aggregate(files: List[str], freq: str = '1D', output: Optional[str] = None) -> pd.DataFrame:
     """Quick one-liner aggregation."""
-    agg = SolarAggregator()
+    agg = Solstice()
     for f in files:
         agg.add_file(f)
     df = agg.aggregate(freq=freq)

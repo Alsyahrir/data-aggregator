@@ -5,7 +5,7 @@ Fetches historical weather data for a location and merges it with
 aggregated solar data to produce ML-ready features for forecasting.
 
 Usage:
-    from solar_aggregator.weather import enrich_with_weather
+    from solstice.weather import enrich_with_weather
 
     df_enriched = enrich_with_weather(
         df,                         # aggregated solar DataFrame

@@ -79,7 +79,7 @@ const SCHEMA_FIELDS = [
   { name: 'humidity', req: false, unit: '%', desc: 'Relative humidity' },
 ];
 
-export default function SolarAggregatorPage() {
+export default function SolsticePage() {
   const [activeStep, setActiveStep] = useState(1);
   const [apiOnline, setApiOnline] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -314,7 +314,7 @@ export default function SolarAggregatorPage() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `solar_aggregated.${format === 'xlsx' ? 'xlsx' : 'csv'}`;
+      a.download = `solstice_aggregated.${format === 'xlsx' ? 'xlsx' : 'csv'}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -410,7 +410,7 @@ export default function SolarAggregatorPage() {
         <div className="nav-brand">
           <div className="brand-icon-wrap">☀️</div>
           <div>
-            <span className="brand-title">Solar Data Aggregator</span>
+            <span className="brand-title">Solstice</span>
             <span className="brand-tag">Vercel Native</span>
           </div>
         </div>

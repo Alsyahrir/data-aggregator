@@ -1,5 +1,5 @@
 """
-Solar Data Aggregator — Web Interface
+Solstice — Web Interface
 Run: streamlit run app.py
 """
 
@@ -12,18 +12,18 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
-from solar_aggregator import SolarAggregator, LLMAnalyzer
-from solar_aggregator.detection import auto_detect_columns
-from solar_aggregator.processing import (
+from solstice import Solstice, LLMAnalyzer
+from solstice.detection import auto_detect_columns
+from solstice.processing import (
     load_file, validate_dataframe, detect_anomalies, auto_clean,
 )
-from solar_aggregator.schema import SCHEMA, print_schema
+from solstice.schema import SCHEMA, print_schema
 
 
 # ── Page Config ──────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Solar Data Aggregator",
+    page_title="Solstice",
     page_icon="☀️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -884,7 +884,7 @@ if uploaded_files:
     if run_clicked:
         progress = st.progress(0, text="Loading files...")
         try:
-            agg = SolarAggregator(verbose=False)
+            agg = Solstice(verbose=False)
             
             total_files = len(files_data)
             for i, (fname, fdata) in enumerate(files_data.items()):
@@ -1256,7 +1256,7 @@ if st.session_state.analysis_done and st.session_state.aggregated_df is not None
         st.download_button(
             "⬇️  Aggregated CSV",
             csv_agg,
-            file_name=f"solar_aggregated_{freq_label.lower()}.csv",
+            file_name=f"solstice_aggregated_{freq_label.lower()}.csv",
             mime="text/csv",
             use_container_width=True,
         )
@@ -1312,7 +1312,7 @@ if st.session_state.analysis_done and st.session_state.aggregated_df is not None
     if enrich_clicked:
         with st.spinner("Fetching weather data from Open-Meteo..."):
             try:
-                from solar_aggregator.weather import enrich_with_weather
+                from solstice.weather import enrich_with_weather
                 enriched = enrich_with_weather(df, latitude=lat, longitude=lon)
                 st.session_state.weather_enriched_df = enriched
                 st.session_state.forecaster = None
@@ -1376,7 +1376,7 @@ if st.session_state.analysis_done and st.session_state.aggregated_df is not None
         if forecast_clicked:
             progress_fc = st.progress(0, text="Preparing data...")
             try:
-                from solar_aggregator.forecasting import SolarForecaster
+                from solstice.forecasting import SolarForecaster
                 forecaster = SolarForecaster()
                 progress_fc.progress(30, text="Training Random Forest...")
                 forecaster.fit(forecast_df)
@@ -1490,7 +1490,7 @@ if st.session_state.analysis_done and st.session_state.aggregated_df is not None
     
     st.markdown("""
     <div class="app-footer">
-        Made with ☀️ for the Solar Data Aggregator project<br>
+        Made with ☀️ for the Solstice project<br>
         Powered by Streamlit & Plotly
     </div>
     """, unsafe_allow_html=True)
@@ -1564,7 +1564,7 @@ if not uploaded_files:
     
     st.markdown("""
     <div class="app-footer">
-        Made with ☀️ for the Solar Data Aggregator project<br>
+        Made with ☀️ for the Solstice project<br>
         Powered by Streamlit & Plotly
     </div>
     """, unsafe_allow_html=True)

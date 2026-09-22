@@ -1,6 +1,6 @@
-# ☀️ Solar Data Aggregator
+# ☀️ Solstice
 
-A Python library and Streamlit web app for aggregating solar panel data from multiple sources with LLM-assisted schema detection, weather enrichment, anomaly detection, and energy forecasting.
+A Python library — with a Next.js/FastAPI web app and a Streamlit interface — for aggregating solar panel data from multiple sources with LLM-assisted schema detection, weather enrichment, anomaly detection, and energy forecasting.
 
 ## Features
 
@@ -12,7 +12,7 @@ A Python library and Streamlit web app for aggregating solar panel data from mul
 - **Anomaly detection** (IQR or Z-score based) with flag/drop/clip strategies
 - **Weather enrichment** via Open-Meteo (free, no API key)
 - **Energy forecasting** with Random Forest + weather scenario analysis
-- **Interactive dashboard** with Plotly charts
+- **Interactive dashboard** with Plotly / Chart.js charts
 - **Schema extensibility** — register custom fields at runtime
 
 ## Architecture
@@ -35,7 +35,15 @@ pip install -r requirements.txt
 
 ## Quick Start
 
-### Web Interface (Streamlit)
+### Web Interface (Next.js + FastAPI, deployed on Vercel)
+
+```bash
+npm install
+npm run dev            # Next.js frontend on http://localhost:3000
+uvicorn api.index:app --reload --port 8000   # FastAPI backend, in a second terminal
+```
+
+### Web Interface (Streamlit, local/legacy)
 
 ```bash
 streamlit run app.py
@@ -44,9 +52,9 @@ streamlit run app.py
 ### Basic Usage (Python)
 
 ```python
-from solar_aggregator import SolarAggregator
+from solstice import Solstice
 
-agg = SolarAggregator()
+agg = Solstice()
 agg.add_file("data.xlsx", mapping={
     "Date": "timestamp",
     "Value (Graph Scale : 1.000000 )": "energy"
@@ -58,7 +66,7 @@ agg.save("output.csv")
 ### LLM-Powered (Automatic Detection)
 
 ```python
-from solar_aggregator import LLMAnalyzer
+from solstice import LLMAnalyzer
 
 analyzer = LLMAnalyzer(api_key="your-groq-key")
 analyzer.add_file("data.xlsx")
@@ -71,7 +79,7 @@ df = agg.aggregate(freq="1D")
 ### Weather Enrichment
 
 ```python
-from solar_aggregator.weather import enrich_with_weather
+from solstice.weather import enrich_with_weather
 
 df_enriched = enrich_with_weather(
     df,
@@ -83,7 +91,7 @@ df_enriched = enrich_with_weather(
 ### Energy Forecasting
 
 ```python
-from solar_aggregator.forecasting import SolarForecaster
+from solstice.forecasting import SolarForecaster
 
 forecaster = SolarForecaster()
 forecaster.fit(df_enriched)
@@ -99,7 +107,7 @@ for s in scenarios:
 ### Anomaly Detection
 
 ```python
-from solar_aggregator import detect_anomalies, auto_clean
+from solstice import detect_anomalies, auto_clean
 
 # Flag anomalies (keeps all rows, adds is_anomaly column)
 df_flagged = detect_anomalies(df, method="iqr")
@@ -111,7 +119,7 @@ df_clean = auto_clean(df, strategy="drop")
 ### Custom Schema Fields
 
 ```python
-from solar_aggregator import register_field
+from solstice import register_field
 
 register_field("efficiency", keywords=["eff", "eta"], unit="%")
 ```
@@ -119,21 +127,27 @@ register_field("efficiency", keywords=["eff", "eta"], unit="%")
 ## File Structure
 
 ```
-solar_aggregator/
+solstice/
 ├── __init__.py          # Package exports
-├── schema.py            # Schema definitions + custom exceptions
-├── detection.py         # Column detection (keyword + LLM)
-├── processing.py        # Data processing + anomaly detection
-├── aggregator.py        # Main aggregation class
-├── llm_integration.py   # Groq LLM integration
-├── visualization.py     # Matplotlib plotting functions
-├── weather.py           # Open-Meteo weather enrichment
-└── forecasting.py       # Random Forest forecasting
+├── schema.py             # Schema definitions + custom exceptions
+├── detection.py          # Column detection (keyword + LLM)
+├── processing.py         # Data processing + anomaly detection
+├── aggregator.py         # Main aggregation class (Solstice)
+├── llm_integration.py    # Groq LLM integration
+├── visualization.py      # Matplotlib plotting functions
+├── weather.py             # Open-Meteo weather enrichment
+└── forecasting.py        # Random Forest forecasting
+api/
+└── index.py               # FastAPI backend (Vercel serverless function)
+src/app/
+├── page.jsx               # Next.js frontend (upload/detect/aggregate/forecast UI)
+├── layout.jsx
+└── globals.css
 tests/
-├── test_schema.py       # Schema unit tests
-├── test_detection.py    # Detection unit tests
-├── test_processing.py   # Processing + anomaly tests
-└── test_aggregator.py   # End-to-end integration tests
+├── test_schema.py         # Schema unit tests
+├── test_detection.py      # Detection unit tests
+├── test_processing.py     # Processing + anomaly tests
+└── test_aggregator.py     # End-to-end integration tests
 ```
 
 ## Schema

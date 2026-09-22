@@ -373,13 +373,13 @@ REMEMBER: Only ONE column per schema field!"""
 
         return "\n".join(lines)
 
-    def create_aggregator(self) -> 'SolarAggregator':
-        """Create a SolarAggregator from the analysis results."""
+    def create_aggregator(self) -> 'Solstice':
+        """Create a Solstice aggregator from the analysis results."""
         if not self.analysis_result:
             raise ValueError("No analysis. Call analyze() first.")
 
-        from .aggregator import SolarAggregator
-        agg = SolarAggregator(verbose=self.verbose)
+        from .aggregator import Solstice
+        agg = Solstice(verbose=self.verbose)
 
         for f in self.analysis_result.files:
             agg.add_file(filepath=f.filepath, source_id=f.source_id, mapping=f.column_mapping)

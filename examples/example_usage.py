@@ -12,7 +12,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.chdir(ROOT)
 
-from solar_aggregator import SolarAggregator, print_schema
+from solstice import Solstice, print_schema
 
 
 def main():
@@ -47,7 +47,7 @@ def main():
     print("LOADING FILES")
     print("=" * 70)
 
-    agg = SolarAggregator(verbose=True)
+    agg = Solstice(verbose=True)
 
     for i, filepath in enumerate(existing_files, 1):
         source_id = f"Panel{i:02d}"

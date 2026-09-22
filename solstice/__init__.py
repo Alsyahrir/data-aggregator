@@ -1,20 +1,20 @@
 """
-Solar Data Aggregator Library
+Solstice — Solar Data Aggregation Library
 
 A Python library for aggregating solar data from multiple sources
 with LLM-assisted schema detection, weather enrichment, and forecasting.
 
 Quick Start:
-    from solar_aggregator import SolarAggregator
-    
-    agg = SolarAggregator()
+    from solstice import Solstice
+
+    agg = Solstice()
     agg.add_file("inverter.csv")
     df = agg.aggregate(freq="1D")
     agg.save("output.csv")
 
 With LLM:
-    from solar_aggregator import LLMAnalyzer
-    
+    from solstice import LLMAnalyzer
+
     analyzer = LLMAnalyzer(api_key="your-groq-key")
     analyzer.add_file("data.xlsx")
     analyzer.analyze()
@@ -22,13 +22,13 @@ With LLM:
     df = agg.aggregate(freq="1D")
 
 With Weather Enrichment:
-    from solar_aggregator.weather import enrich_with_weather
-    
+    from solstice.weather import enrich_with_weather
+
     df_enriched = enrich_with_weather(df, latitude=1.35, longitude=103.82)
 
 With Forecasting:
-    from solar_aggregator.forecasting import SolarForecaster
-    
+    from solstice.forecasting import SolarForecaster
+
     forecaster = SolarForecaster()
     forecaster.fit(df_enriched)
     metrics = forecaster.get_metrics()
@@ -37,13 +37,13 @@ With Forecasting:
 
 __version__ = "2.0.0"
 
-from .aggregator import SolarAggregator, quick_aggregate
+from .aggregator import Solstice, quick_aggregate
 from .llm_integration import LLMAnalyzer, analyze_and_aggregate, get_prompt_for_manual_llm
 from .schema import (
     SCHEMA, SchemaField, AggregationMethod,
     get_aggregation_rules, get_required_fields, get_optional_fields, print_schema,
     register_field,
-    SolarAggregatorError, SchemaValidationError, DetectionError,
+    SolsticeError, SchemaValidationError, DetectionError,
     AggregationError, WeatherEnrichmentError,
 )
 from .detection import auto_detect_columns, generate_llm_prompt, parse_llm_response, format_llm_result_for_review
@@ -56,12 +56,12 @@ from .visualization import plot_time_alignment, print_time_alignment_report, plo
 
 __all__ = [
     # Core
-    "SolarAggregator", "LLMAnalyzer", "quick_aggregate", "analyze_and_aggregate",
+    "Solstice", "LLMAnalyzer", "quick_aggregate", "analyze_and_aggregate",
     # Schema
     "SCHEMA", "SchemaField", "AggregationMethod",
     "get_aggregation_rules", "print_schema", "register_field",
     # Exceptions
-    "SolarAggregatorError", "SchemaValidationError", "DetectionError",
+    "SolsticeError", "SchemaValidationError", "DetectionError",
     "AggregationError", "WeatherEnrichmentError",
     # Detection
     "auto_detect_columns", "generate_llm_prompt",

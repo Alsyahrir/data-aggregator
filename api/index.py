@@ -1,6 +1,6 @@
 """
-Solar Data Aggregator — Vercel Serverless API Backend
-Built with FastAPI, interfacing with the solar_aggregator core engine.
+Solstice — Vercel Serverless API Backend
+Built with FastAPI, interfacing with the solstice core engine.
 """
 
 import sys
@@ -16,15 +16,15 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Respo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-# Ensure root directory is in sys.path so solar_aggregator can be imported
+# Ensure root directory is in sys.path so solstice can be imported
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from solar_aggregator import SolarAggregator, LLMAnalyzer
-from solar_aggregator.schema import SCHEMA
-from solar_aggregator.detection import auto_detect_columns
-from solar_aggregator.processing import (
+from solstice import Solstice, LLMAnalyzer
+from solstice.schema import SCHEMA
+from solstice.detection import auto_detect_columns
+from solstice.processing import (
     load_file,
     standardise_dataframe,
     merge_with_environment,
@@ -34,11 +34,11 @@ from solar_aggregator.processing import (
     auto_clean,
     validate_dataframe,
 )
-from solar_aggregator.weather import enrich_with_weather
-from solar_aggregator.forecasting import SolarForecaster
+from solstice.weather import enrich_with_weather
+from solstice.forecasting import SolarForecaster
 
 app = FastAPI(
-    title="Solar Data Aggregator API",
+    title="Solstice API",
     description="Native Vercel backend for solar data processing, schema mapping, weather enrichment, and forecasting.",
     version="2.0.0",
 )
@@ -84,7 +84,7 @@ def df_to_records(df: pd.DataFrame, max_rows: Optional[int] = None) -> List[Dict
 def health():
     return {
         "status": "ok",
-        "service": "Solar Data Aggregator API",
+        "service": "Solstice API",
         "version": "2.0.0",
         "python_version": sys.version,
     }
@@ -205,7 +205,7 @@ async def process_data_endpoint(
     temp_files = []
 
     try:
-        agg = SolarAggregator(verbose=False)
+        agg = Solstice(verbose=False)
 
         for uf in files:
             contents = await uf.read()
@@ -421,17 +421,17 @@ async def export_endpoint(
     if export_format in ["xlsx", "excel"]:
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            df.to_excel(writer, index=False, sheet_name="Solar_Aggregated")
+            df.to_excel(writer, index=False, sheet_name="Solstice_Aggregated")
         buf.seek(0)
         return StreamingResponse(
             buf,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": 'attachment; filename="solar_aggregated.xlsx"'},
+            headers={"Content-Disposition": 'attachment; filename="solstice_aggregated.xlsx"'},
         )
     else:
         csv_str = df.to_csv(index=False)
         return Response(
             content=csv_str,
             media_type="text/csv",
-            headers={"Content-Disposition": 'attachment; filename="solar_aggregated.csv"'},
+            headers={"Content-Disposition": 'attachment; filename="solstice_aggregated.csv"'},
         )

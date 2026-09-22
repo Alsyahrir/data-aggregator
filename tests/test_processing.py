@@ -1,4 +1,4 @@
-"""Tests for solar_aggregator.processing module."""
+"""Tests for solstice.processing module."""
 
 import pytest
 import pandas as pd
@@ -6,7 +6,7 @@ import numpy as np
 import tempfile
 import os
 
-from solar_aggregator.processing import (
+from solstice.processing import (
     load_file,
     standardise_dataframe,
     validate_dataframe,

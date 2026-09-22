@@ -5,7 +5,7 @@ Extracts the forecasting logic from the Colab notebook into a reusable
 module that can be called from the Streamlit app or standalone scripts.
 
 Usage:
-    from solar_aggregator.forecasting import SolarForecaster
+    from solstice.forecasting import SolarForecaster
 
     forecaster = SolarForecaster()
     forecaster.fit(df)

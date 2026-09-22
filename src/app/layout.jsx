@@ -1,7 +1,7 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'Solar Data Aggregator — Intelligent Analytics & Forecasting',
+  title: 'Solstice — Intelligent Solar Analytics & Forecasting',
   description:
     'Aggregate solar panel data from multiple sources with automated schema detection, weather enrichment, anomaly handling, and energy forecasting.',
   icons: {
