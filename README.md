@@ -9,7 +9,7 @@ A Python library for aggregating solar panel data from multiple sources — with
 ## Features
 
 - **Auto-detect column mappings** using keyword pattern matching
-- **LLM-powered detection** for unusual column names (Groq API)
+- **LLM-powered detection** for unusual column names — bring any provider (Groq, OpenAI, Anthropic, a local model, or your own)
 - **Merge** inverter data with environmental and irradiance data
 - **Time alignment** to regular intervals
 - **Proper aggregation** (SUM for energy, MEAN for temperature)
@@ -39,11 +39,12 @@ them still works, those features just print a friendly "pip install X" note
 when called.
 
 ```bash
-pip install -e .              # core only
-pip install -e ".[all]"       # core + LLM detection + forecasting + plotting
-pip install -e ".[llm]"       # just Groq LLM column detection
-pip install -e ".[forecast]"  # just scikit-learn forecasting
-pip install -e ".[viz]"       # just matplotlib charts
+pip install -e .                 # core only
+pip install -e ".[all]"          # core + LLM detection (all providers) + forecasting + plotting
+pip install -e ".[llm]"          # Groq / OpenAI / any OpenAI-compatible endpoint
+pip install -e ".[llm-anthropic]" # Anthropic (Claude) specifically
+pip install -e ".[forecast]"     # just scikit-learn forecasting
+pip install -e ".[viz]"          # just matplotlib charts
 ```
 
 ## Quick Start
@@ -64,15 +65,49 @@ agg.save("output.csv")
 
 ### LLM-Powered (Automatic Detection)
 
+Any LLM backend works — column detection only ever needs a text-in,
+text-out completion, so the provider is fully pluggable (`solstice.llm_providers`).
+
 ```python
 from solstice import LLMAnalyzer
+from solstice.llm_providers import GroqProvider, OpenAIProvider, AnthropicProvider, OpenAICompatibleProvider
 
+# Groq (free tier) — or the api_key= shorthand below does this for you
+analyzer = LLMAnalyzer(provider=GroqProvider(api_key="your-groq-key"))
+
+# OpenAI
+analyzer = LLMAnalyzer(provider=OpenAIProvider(api_key="sk-..."))
+
+# Anthropic (Claude)
+analyzer = LLMAnalyzer(provider=AnthropicProvider(api_key="sk-ant-..."))
+
+# Anything OpenAI-compatible — local Ollama/vLLM, Together, Fireworks, etc.
+analyzer = LLMAnalyzer(provider=OpenAICompatibleProvider(
+    api_key="not-needed-for-local",
+    base_url="http://localhost:11434/v1",
+    models=["llama3"],
+))
+
+# Shorthand: api_key= alone still defaults to Groq, unchanged from before
 analyzer = LLMAnalyzer(api_key="your-groq-key")
+
 analyzer.add_file("data.xlsx")
 analyzer.analyze()
 
 agg = analyzer.create_aggregator()
 df = agg.aggregate(freq="1D")
+```
+
+Nothing built in fits? Wrap any callable with `CustomProvider`:
+
+```python
+from solstice.llm_providers import CustomProvider
+
+def my_llm(system_prompt: str, user_prompt: str) -> str:
+    ...  # call your own model however you like
+    return response_text
+
+analyzer = LLMAnalyzer(provider=CustomProvider(my_llm))
 ```
 
 ### Weather Enrichment
@@ -141,7 +176,8 @@ solstice/
 ├── detection.py          # Column detection (keyword + LLM)
 ├── processing.py         # Data processing + anomaly detection
 ├── aggregator.py         # Main aggregation class (Solstice)
-├── llm_integration.py    # Groq LLM integration
+├── llm_integration.py    # Two-tier column detection (keyword, then LLM)
+├── llm_providers.py       # Pluggable LLM backends (Groq/OpenAI/Anthropic/custom)
 ├── visualization.py      # Matplotlib plotting functions
 ├── weather.py             # Open-Meteo weather enrichment
 └── forecasting.py        # Random Forest forecasting
@@ -151,10 +187,16 @@ examples/
 ├── example_llm_OEDI.py    # LLM detection against the OEDI sample dataset
 └── visualization.py       # Chart generation walkthrough
 tests/
-├── test_schema.py         # Schema unit tests
-├── test_detection.py      # Detection unit tests
-├── test_processing.py     # Processing + anomaly tests
-└── test_aggregator.py     # End-to-end integration tests
+├── conftest.py             # Shared fixtures (e.g. blocks real LLM calls)
+├── test_schema.py          # Schema unit tests
+├── test_detection.py       # Detection unit tests
+├── test_processing.py      # Processing + anomaly tests
+├── test_aggregator.py      # End-to-end integration tests
+├── test_weather.py         # Weather enrichment tests (mocked HTTP)
+├── test_forecasting.py     # Forecasting tests
+├── test_llm_integration.py # LLMAnalyzer tests (mocked provider)
+├── test_llm_providers.py   # Per-provider tests (mocked SDK clients)
+└── test_visualization.py   # Chart rendering tests
 .github/workflows/
 └── tests.yml              # CI — runs pytest on Python 3.10/3.11/3.12
 pyproject.toml              # Package metadata + optional extras
@@ -187,12 +229,16 @@ pytest tests/ -v
 Every push and pull request runs the same suite on Python 3.10, 3.11 and 3.12
 via GitHub Actions (see the badge at the top of this file).
 
-## Get Groq API Key
+## Get an LLM API Key
 
-1. Go to https://console.groq.com
-2. Sign up (free)
-3. Create API key
-4. Use in your code
+Any of these work with the LLM detection feature — pick one:
+
+| Provider | Free tier | Get a key |
+|---|---|---|
+| Groq (default) | Yes | https://console.groq.com |
+| OpenAI | No | https://platform.openai.com/api-keys |
+| Anthropic | No | https://console.anthropic.com |
+| Local (Ollama, vLLM, etc.) | N/A — no key needed | — |
 
 ## License
 

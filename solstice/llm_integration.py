@@ -4,12 +4,7 @@ import pandas as pd
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
-GROQ_AVAILABLE = False
-try:
-    from groq import Groq
-    GROQ_AVAILABLE = True
-except ImportError:
-    Groq = None
+from .llm_providers import LLMProvider, GroqProvider
 
 DATA_FIELDS = {"energy", "ambient_temp", "irradiance", "wind_speed", "module_temp", "humidity"}
 
@@ -41,28 +36,53 @@ class LLMAnalyzer:
     """
     Analyzes solar data files using a two-tier detection strategy:
       Tier 1 — Keyword pattern matching (fast, no API call)
-      Tier 2 — Groq LLM semantic analysis (fallback for ambiguous files)
+      Tier 2 — LLM semantic analysis (fallback for ambiguous files)
+
+    Tier 2 works with any LLM backend — pass a `provider=` (see
+    solstice.llm_providers: GroqProvider, OpenAIProvider, AnthropicProvider,
+    OpenAICompatibleProvider for anything else, or CustomProvider to wrap
+    your own function). `api_key=` remains as a shorthand for the default
+    Groq provider.
 
     Usage:
-        analyzer = LLMAnalyzer(api_key="your-key")
+        from solstice.llm_providers import OpenAIProvider
+
+        analyzer = LLMAnalyzer(provider=OpenAIProvider(api_key="sk-..."))
+        # or, for the previous Groq-only shorthand:
+        analyzer = LLMAnalyzer(api_key="your-groq-key")
+
         analyzer.add_file("data.xlsx")
         analyzer.analyze()
         agg = analyzer.create_aggregator()
         df = agg.aggregate(freq="1D")
     """
 
-    def __init__(self, api_key: Optional[str] = None, verbose: bool = False):
+    def __init__(
+        self,
+        provider: Optional[LLMProvider] = None,
+        api_key: Optional[str] = None,
+        verbose: bool = False,
+    ):
         self.verbose = verbose
         self.files_info: List[Dict] = []
         self.filepaths: List[str] = []
         self._df_samples: List[pd.DataFrame] = []
         self.analysis_result: Optional[AnalysisResult] = None
-        self.api_key = api_key or os.environ.get('GROQ_API_KEY')
 
-        if not GROQ_AVAILABLE:
-            self._log("Groq not installed. Run: pip install groq")
-        elif self.api_key:
-            self.client = Groq(api_key=self.api_key)
+        if provider is not None:
+            self.provider: Optional[LLMProvider] = provider
+            self.api_key = api_key
+        else:
+            # Backward-compatible shorthand: api_key (or GROQ_API_KEY env
+            # var) builds a default GroqProvider. Pass `provider=` directly
+            # for any other backend — see solstice.llm_providers.
+            self.api_key = api_key or os.environ.get('GROQ_API_KEY')
+            self.provider = None
+            if self.api_key:
+                try:
+                    self.provider = GroqProvider(api_key=self.api_key)
+                except ImportError as e:
+                    self._log(str(e))
 
     def _log(self, msg: str):
         if self.verbose:
@@ -200,26 +220,18 @@ RESPOND WITH ONLY THIS JSON:
 REMEMBER: Only ONE column per schema field!"""
 
     def _call_llm(self, files_info: List[Dict]) -> str:
-        """Send files_info to Groq and return raw response text."""
+        """Send files_info to the configured LLM provider, return raw response text.
+
+        Per-model retry/fallback (e.g. Groq's multiple free-tier models) is
+        the provider's responsibility, not this method's — see
+        solstice.llm_providers.OpenAICompatibleProvider.
+        """
         prompt = self._build_prompt(files_info)
-        models = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768']
-
-        for model in models:
-            try:
-                response = self.client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "You are a solar data expert. Respond only with valid JSON. Never map multiple columns to the same field."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.1,
-                    max_tokens=2000,
-                )
-                return response.choices[0].message.content
-            except Exception as e:
-                self._log(f"  {model} failed: {str(e)[:60]}")
-
-        raise RuntimeError("All Groq models failed")
+        system_prompt = (
+            "You are a solar data expert. Respond only with valid JSON. "
+            "Never map multiple columns to the same field."
+        )
+        return self.provider.complete(system_prompt, prompt)
 
     def _parse_llm_response(self, response_text: str, filepaths: List[str],
                              files_info: List[Dict]) -> List[FileAnalysis]:
@@ -305,10 +317,13 @@ REMEMBER: Only ONE column per schema field!"""
 
         # Tier 2: LLM for ambiguous files
         if llm_indices:
-            if not GROQ_AVAILABLE:
-                raise ImportError("groq package required. Run: pip install groq")
-            if not self.api_key:
-                raise ValueError("No API key for Groq LLM. Get one at https://console.groq.com")
+            if self.provider is None:
+                raise ValueError(
+                    "No LLM provider configured. Pass provider=<LLMProvider instance> "
+                    "(see solstice.llm_providers: GroqProvider, OpenAIProvider, "
+                    "AnthropicProvider, OpenAICompatibleProvider, CustomProvider) "
+                    "or api_key=... for the default Groq provider."
+                )
 
             llm_files_info = [self.files_info[i] for i in llm_indices]
             llm_filepaths = [self.filepaths[i] for i in llm_indices]
@@ -387,10 +402,15 @@ REMEMBER: Only ONE column per schema field!"""
         return agg
 
 
-def analyze_and_aggregate(files: List[str], api_key: str, freq: str = "1D",
+def analyze_and_aggregate(files: List[str], api_key: Optional[str] = None,
+                           provider: Optional[LLMProvider] = None, freq: str = "1D",
                            output: Optional[str] = None) -> pd.DataFrame:
-    """One-liner: analyze and aggregate."""
-    analyzer = LLMAnalyzer(api_key=api_key)
+    """One-liner: analyze and aggregate.
+
+    Pass either `api_key` (Groq shorthand) or `provider` (any LLMProvider —
+    see solstice.llm_providers).
+    """
+    analyzer = LLMAnalyzer(provider=provider, api_key=api_key)
     for f in files:
         analyzer.add_file(f)
     analyzer.analyze()

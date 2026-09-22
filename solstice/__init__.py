@@ -15,11 +15,18 @@ Quick Start:
 With LLM:
     from solstice import LLMAnalyzer
 
-    analyzer = LLMAnalyzer(api_key="your-groq-key")
+    analyzer = LLMAnalyzer(api_key="your-groq-key")  # shorthand for GroqProvider
     analyzer.add_file("data.xlsx")
     analyzer.analyze()
     agg = analyzer.create_aggregator()
     df = agg.aggregate(freq="1D")
+
+    # Any LLM backend works — see solstice.llm_providers for OpenAIProvider,
+    # AnthropicProvider, OpenAICompatibleProvider (local models, Together,
+    # Fireworks, etc.), or CustomProvider to wrap your own function:
+    #
+    #     from solstice.llm_providers import OpenAIProvider
+    #     analyzer = LLMAnalyzer(provider=OpenAIProvider(api_key="sk-..."))
 
 With Weather Enrichment:
     from solstice.weather import enrich_with_weather
@@ -39,6 +46,10 @@ __version__ = "2.0.0"
 
 from .aggregator import Solstice, quick_aggregate
 from .llm_integration import LLMAnalyzer, analyze_and_aggregate, get_prompt_for_manual_llm
+from .llm_providers import (
+    LLMProvider, GroqProvider, OpenAIProvider, AnthropicProvider,
+    OpenAICompatibleProvider, CustomProvider,
+)
 from .schema import (
     SCHEMA, SchemaField, AggregationMethod,
     get_aggregation_rules, get_required_fields, get_optional_fields, print_schema,
@@ -60,6 +71,9 @@ from .visualization import (
 __all__ = [
     # Core
     "Solstice", "LLMAnalyzer", "quick_aggregate", "analyze_and_aggregate",
+    # LLM Providers
+    "LLMProvider", "GroqProvider", "OpenAIProvider", "AnthropicProvider",
+    "OpenAICompatibleProvider", "CustomProvider",
     # Schema
     "SCHEMA", "SchemaField", "AggregationMethod",
     "get_aggregation_rules", "print_schema", "register_field",

@@ -141,7 +141,7 @@ class TestAnalyzeKeywordOnly:
         path = _write_csv(tmp_path, "weird.csv", AMBIGUOUS_DF)
         analyzer = LLMAnalyzer(api_key=None)
         analyzer.add_file(path)
-        with pytest.raises(ValueError, match="No API key"):
+        with pytest.raises(ValueError, match="No LLM provider configured"):
             analyzer.analyze()
 
     def test_get_analysis_summary_before_analyze(self):
@@ -155,28 +155,29 @@ class TestAnalyzeKeywordOnly:
 
 
 class TestLLMPath:
-    """Mocks analyzer.client directly — no real Groq API traffic."""
+    """Mocks analyzer.provider directly — provider-agnostic, no real API
+    traffic. Provider-internal behavior (e.g. Groq's multi-model retry) is
+    tested separately in test_llm_providers.py."""
 
-    def test_falls_back_across_models_then_raises(self, tmp_path):
+    def test_provider_failure_propagates(self, tmp_path):
         path = _write_csv(tmp_path, "weird.csv", AMBIGUOUS_DF)
         analyzer = LLMAnalyzer(api_key="fake-key")
         analyzer.add_file(path)
 
-        analyzer.client = MagicMock()
-        analyzer.client.chat.completions.create.side_effect = Exception("API down")
+        analyzer.provider = MagicMock()
+        analyzer.provider.complete.side_effect = RuntimeError("All models failed")
 
-        with pytest.raises(RuntimeError, match="All Groq models failed"):
+        with pytest.raises(RuntimeError, match="All models failed"):
             analyzer.analyze()
-        assert analyzer.client.chat.completions.create.call_count == 3  # 3 models tried
+        analyzer.provider.complete.assert_called_once()
 
     def test_uses_llm_mapping_for_ambiguous_file(self, tmp_path):
         path = _write_csv(tmp_path, "weird.csv", AMBIGUOUS_DF)
         analyzer = LLMAnalyzer(api_key="fake-key")
         analyzer.add_file(path)
 
-        fake_response = MagicMock()
-        fake_response.choices = [MagicMock()]
-        fake_response.choices[0].message.content = json.dumps({
+        analyzer.provider = MagicMock()
+        analyzer.provider.complete.return_value = json.dumps({
             "analysis_summary": "test",
             "files": [{
                 "filename": "weird.csv",
@@ -191,9 +192,6 @@ class TestLLMPath:
             "warnings": [],
         })
 
-        analyzer.client = MagicMock()
-        analyzer.client.chat.completions.create.return_value = fake_response
-
         result = analyzer.analyze()
         assert result.files[0].detection_method == "llm"
         assert result.files[0].column_mapping == {"Zeitpunkt": "timestamp", "Wert": "energy"}
@@ -206,9 +204,8 @@ class TestLLMPath:
         analyzer.add_file(standard_path)
         analyzer.add_file(ambiguous_path)
 
-        fake_response = MagicMock()
-        fake_response.choices = [MagicMock()]
-        fake_response.choices[0].message.content = json.dumps({
+        analyzer.provider = MagicMock()
+        analyzer.provider.complete.return_value = json.dumps({
             "files": [{
                 "filename": "weird.csv",
                 "file_type": "inverter",
@@ -218,14 +215,35 @@ class TestLLMPath:
                 "confidence": "high",
             }],
         })
-        analyzer.client = MagicMock()
-        analyzer.client.chat.completions.create.return_value = fake_response
 
         result = analyzer.analyze()
         methods = {f.filename: f.detection_method for f in result.files}
         assert methods == {"std.csv": "keyword", "weird.csv": "llm"}
         # Order is preserved matching add_file() call order.
         assert [f.filename for f in result.files] == ["std.csv", "weird.csv"]
+        # Tier-1 file never touched the provider — only the ambiguous one did.
+        analyzer.provider.complete.assert_called_once()
+
+    def test_explicit_provider_takes_precedence_over_api_key(self, tmp_path):
+        """A provider= argument should be used as-is, ignoring api_key."""
+        path = _write_csv(tmp_path, "weird.csv", AMBIGUOUS_DF)
+        mock_provider = MagicMock()
+        mock_provider.complete.return_value = json.dumps({
+            "files": [{
+                "filename": "weird.csv",
+                "file_type": "inverter",
+                "source_id": "WEIRD",
+                "column_mapping": {"Zeitpunkt": "timestamp", "Wert": "energy"},
+                "confidence": "high",
+            }],
+        })
+
+        analyzer = LLMAnalyzer(provider=mock_provider, api_key="ignored-key")
+        assert analyzer.provider is mock_provider
+
+        analyzer.add_file(path)
+        result = analyzer.analyze()
+        assert result.files[0].column_mapping == {"Zeitpunkt": "timestamp", "Wert": "energy"}
 
 
 class TestGetPromptForManualLLM:
