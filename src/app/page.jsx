@@ -45,6 +45,30 @@ ChartJS.register(
   Filler
 );
 
+// Safely extract a readable message from a failed fetch response. The API
+// normally returns JSON ({ detail: "..." }), but platform-level errors
+// (e.g. Vercel's 4.5MB serverless request body limit) return plain text
+// like "Request Entity Too Large" instead — parsing that as JSON throws
+// a confusing "Unexpected token" error, so read as text first and only
+// attempt JSON.parse after.
+async function parseErrorResponse(res) {
+  let text = '';
+  try {
+    text = await res.text();
+  } catch {
+    return `Request failed with status ${res.status}`;
+  }
+  try {
+    const data = JSON.parse(text);
+    return data.detail || data.message || `Request failed (${res.status})`;
+  } catch {
+    if (res.status === 413 || /request entity too large/i.test(text)) {
+      return 'File(s) too large — this server accepts a maximum of 4.5MB per request. Try uploading smaller or fewer files at once.';
+    }
+    return text ? `Server error (${res.status}): ${text.slice(0, 200)}` : `Request failed with status ${res.status}`;
+  }
+}
+
 const SCHEMA_FIELDS = [
   { name: 'timestamp', req: true, unit: 'ISO / Date', desc: 'Date and time of record' },
   { name: 'energy', req: false, unit: 'kWh / MWh', desc: 'Solar generation yield' },
@@ -129,8 +153,7 @@ export default function SolarAggregatorPage() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Failed to detect column schema');
+        throw new Error(await parseErrorResponse(res));
       }
 
       const data = await res.json();
@@ -190,8 +213,7 @@ export default function SolarAggregatorPage() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Aggregation pipeline failed');
+        throw new Error(await parseErrorResponse(res));
       }
 
       const result = await res.json();
@@ -226,8 +248,7 @@ export default function SolarAggregatorPage() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Weather enrichment failed');
+        throw new Error(await parseErrorResponse(res));
       }
 
       const result = await res.json();
@@ -262,8 +283,7 @@ export default function SolarAggregatorPage() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Forecasting failed');
+        throw new Error(await parseErrorResponse(res));
       }
 
       const result = await res.json();
