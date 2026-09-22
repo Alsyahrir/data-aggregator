@@ -1,5 +1,9 @@
 # ☀️ Solstice
 
+[![Tests](https://github.com/Alsyahrir/data-aggregator/actions/workflows/tests.yml/badge.svg)](https://github.com/Alsyahrir/data-aggregator/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 A Python library — with a Next.js/FastAPI web app and a Streamlit interface — for aggregating solar panel data from multiple sources with LLM-assisted schema detection, weather enrichment, anomaly detection, and energy forecasting.
 
 ## Features
@@ -29,8 +33,24 @@ Upload → Detect Columns → Standardise → Merge → Align → Aggregate
 
 ## Installation
 
+The `solstice` package installs with a lean core (pandas/numpy/openpyxl). LLM
+detection, forecasting, and plotting are optional extras — installing without
+them still works, those features just print a friendly "pip install X" note
+when called.
+
 ```bash
-pip install -r requirements.txt
+pip install -e .              # core only
+pip install -e ".[all]"       # core + LLM detection + forecasting + plotting
+pip install -e ".[llm]"       # just Groq LLM column detection
+pip install -e ".[forecast]"  # just scikit-learn forecasting
+pip install -e ".[viz]"       # just matplotlib charts
+```
+
+To also run the web apps (Next.js/FastAPI, Streamlit) or the test suite:
+
+```bash
+pip install -r requirements.txt   # everything, including app-only deps
+npm install                       # Next.js frontend deps
 ```
 
 ## Quick Start
@@ -129,6 +149,7 @@ register_field("efficiency", keywords=["eff", "eta"], unit="%")
 ```
 solstice/
 ├── __init__.py          # Package exports
+├── py.typed              # PEP 561 marker — type hints are part of the public API
 ├── schema.py             # Schema definitions + custom exceptions
 ├── detection.py          # Column detection (keyword + LLM)
 ├── processing.py         # Data processing + anomaly detection
@@ -148,6 +169,10 @@ tests/
 ├── test_detection.py      # Detection unit tests
 ├── test_processing.py     # Processing + anomaly tests
 └── test_aggregator.py     # End-to-end integration tests
+.github/workflows/
+└── tests.yml              # CI — runs pytest on Python 3.10/3.11/3.12
+pyproject.toml              # Package metadata + optional extras
+LICENSE                     # MIT
 ```
 
 ## Schema
@@ -169,8 +194,12 @@ tests/
 ## Running Tests
 
 ```bash
-python -m pytest tests/ -v
+pip install -e ".[all,dev]"
+pytest tests/ -v
 ```
+
+Every push and pull request runs the same suite on Python 3.10, 3.11 and 3.12
+via GitHub Actions (see the badge at the top of this file).
 
 ## Get Groq API Key
 

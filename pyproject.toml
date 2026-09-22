@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "solstice"
+version = "2.0.0"
+description = "Aggregate solar panel data from multiple sources with LLM-assisted schema detection, weather enrichment, anomaly detection, and energy forecasting."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Alsyahrir" },
+]
+keywords = ["solar", "photovoltaic", "energy", "data-aggregation", "forecasting", "renewable-energy"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+
+# Core dependencies only — everything domain-specific (LLM detection,
+# forecasting, plotting) is an optional extra below, matching the lazy
+# imports + friendly "pip install X" error messages already in the code.
+dependencies = [
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "openpyxl>=3.1.0",
+]
+
+[project.optional-dependencies]
+llm = ["groq>=0.4.0"]
+forecast = ["scikit-learn>=1.3.0"]
+viz = ["matplotlib>=3.7.0"]
+all = ["groq>=0.4.0", "scikit-learn>=1.3.0", "matplotlib>=3.7.0"]
+dev = ["pytest>=7.0.0"]
+
+[project.urls]
+Repository = "https://github.com/Alsyahrir/data-aggregator"
+
+[tool.setuptools.packages.find]
+include = ["solstice*"]
+
+[tool.setuptools.package-data]
+solstice = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

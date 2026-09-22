@@ -52,7 +52,10 @@ from .processing import (
     align_timestamps, aggregate_to_period, validate_dataframe,
     detect_anomalies, auto_clean,
 )
-from .visualization import plot_time_alignment, print_time_alignment_report, plot_energy_production, plot_data_quality
+from .visualization import (
+    plot_energy_production, plot_monthly_summary, plot_panel_comparison,
+    plot_data_quality, plot_weekly_pattern, plot_distribution, create_all_charts,
+)
 
 __all__ = [
     # Core
@@ -70,6 +73,6 @@ __all__ = [
     "align_timestamps", "aggregate_to_period",
     "detect_anomalies", "auto_clean",
     # Visualization
-    "plot_time_alignment", "print_time_alignment_report",
-    "plot_energy_production", "plot_data_quality",
+    "plot_energy_production", "plot_monthly_summary", "plot_panel_comparison",
+    "plot_data_quality", "plot_weekly_pattern", "plot_distribution", "create_all_charts",
 ]

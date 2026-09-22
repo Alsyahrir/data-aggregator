@@ -10,3 +10,12 @@ outputs/
 node_modules
 .next/
 .vercel/
+
+# Python packaging artifacts
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg

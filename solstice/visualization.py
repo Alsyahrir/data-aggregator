@@ -2,6 +2,11 @@ import pandas as pd
 import numpy as np
 from typing import Optional
 
+# Shared categorical palette for all charts below, cycled by index so any
+# number of sources gets a distinct (repeating past 8) color instead of the
+# 2-4 hardcoded colors this module used to silently collide on.
+_PALETTE = ['#2ecc71', '#e74c3c', '#3498db', '#f39c12', '#9b59b6', '#1abc9c', '#e67e22', '#34495e']
+
 
 def plot_energy_production(df: pd.DataFrame, save_path: Optional[str] = None):
     """Plot daily energy production over time."""
@@ -13,17 +18,15 @@ def plot_energy_production(df: pd.DataFrame, save_path: Optional[str] = None):
     except ImportError:
         print("matplotlib not installed. Run: pip install matplotlib")
         return
-    
+
     fig, ax = plt.subplots(figsize=(14, 6))
-    
-    colors = {'Panel01': '#2ecc71', 'Panel02': '#e74c3c', 'PANEL01': '#2ecc71', 'PANEL02': '#e74c3c'}
-    
-    for source in sorted(df['source_id'].unique()):
+
+    for i, source in enumerate(sorted(df['source_id'].unique())):
         source_df = df[df['source_id'] == source].sort_values('timestamp')
         # Filter out zero/null values for cleaner chart
         source_df = source_df[source_df['energy'] > 0]
-        color = colors.get(source, '#3498db')
-        ax.plot(source_df['timestamp'], source_df['energy'], 
+        color = _PALETTE[i % len(_PALETTE)]
+        ax.plot(source_df['timestamp'], source_df['energy'],
                label=source, alpha=0.8, linewidth=1.5, color=color)
     
     ax.set_xlabel('Date', fontsize=12)
@@ -64,11 +67,11 @@ def plot_monthly_summary(df: pd.DataFrame, save_path: Optional[str] = None):
     df['month'] = df['timestamp'].dt.to_period('M')
     
     monthly = df.groupby(['month', 'source_id'])['energy'].sum().unstack(fill_value=0)
-    
+
     fig, ax = plt.subplots(figsize=(12, 6))
-    
-    colors = ['#2ecc71', '#e74c3c', '#3498db', '#f39c12']
-    monthly.plot(kind='bar', ax=ax, width=0.8, color=colors[:len(monthly.columns)])
+
+    monthly.plot(kind='bar', ax=ax, width=0.8,
+                 color=[_PALETTE[i % len(_PALETTE)] for i in range(len(monthly.columns))])
     
     ax.set_xlabel('Month', fontsize=12)
     ax.set_ylabel('Total Energy (kWh)', fontsize=12)
@@ -99,11 +102,11 @@ def plot_panel_comparison(df: pd.DataFrame, save_path: Optional[str] = None):
         return
     
     totals = df.groupby('source_id')['energy'].sum().sort_values(ascending=True)
-    
+
     fig, ax = plt.subplots(figsize=(10, 6))
-    
-    colors = ['#2ecc71', '#e74c3c', '#3498db', '#f39c12']
-    bars = ax.barh(totals.index, totals.values, color=colors[:len(totals)])
+
+    bars = ax.barh(totals.index, totals.values,
+                    color=[_PALETTE[i % len(_PALETTE)] for i in range(len(totals))])
     
     ax.set_xlabel('Total Energy (kWh)', fontsize=12)
     ax.set_ylabel('Panel', fontsize=12)
@@ -166,7 +169,8 @@ def plot_data_quality(df: pd.DataFrame, save_path: Optional[str] = None):
     coverage.columns = ['start', 'end', 'total_rows', 'valid_energy']
     coverage['coverage_pct'] = coverage['valid_energy'] / coverage['total_rows'] * 100
     
-    bars2 = ax2.barh(coverage.index, coverage['coverage_pct'], color=['#2ecc71', '#e74c3c'])
+    bars2 = ax2.barh(coverage.index, coverage['coverage_pct'],
+                      color=[_PALETTE[i % len(_PALETTE)] for i in range(len(coverage))])
     ax2.set_xlabel('Data Coverage (%)', fontsize=11)
     ax2.set_title('Valid Energy Readings by Panel', fontsize=12, fontweight='bold')
     ax2.set_xlim(0, 100)
@@ -201,15 +205,18 @@ def plot_weekly_pattern(df: pd.DataFrame, save_path: Optional[str] = None):
     days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
     
     fig, ax = plt.subplots(figsize=(10, 6))
-    
-    colors = ['#2ecc71', '#e74c3c']
-    
-    for i, source in enumerate(sorted(df['source_id'].unique())):
+
+    sources = sorted(df['source_id'].unique())
+    bar_width = 0.8 / max(len(sources), 1)
+
+    for i, source in enumerate(sources):
         source_df = df[df['source_id'] == source]
         daily_avg = source_df.groupby('dayofweek')['energy'].mean()
-        
-        x = [d + i*0.35 - 0.175 for d in daily_avg.index]
-        ax.bar(x, daily_avg.values, width=0.35, label=source, color=colors[i % 2], alpha=0.8)
+
+        offset = (i - (len(sources) - 1) / 2) * bar_width
+        x = [d + offset for d in daily_avg.index]
+        ax.bar(x, daily_avg.values, width=bar_width, label=source,
+               color=_PALETTE[i % len(_PALETTE)], alpha=0.8)
     
     ax.set_xlabel('Day of Week', fontsize=12)
     ax.set_ylabel('Average Energy (kWh)', fontsize=12)
@@ -239,26 +246,27 @@ def plot_distribution(df: pd.DataFrame, save_path: Optional[str] = None):
     df = df[df['energy'] > 0].copy()
 
     fig, ax = plt.subplots(figsize=(12, 6))
-    
-    colors = ['#2ecc71', '#e74c3c']
-    
-    for i, source in enumerate(sorted(df['source_id'].unique())):
+
+    sources = sorted(df['source_id'].unique())
+
+    for i, source in enumerate(sources):
         source_df = df[df['source_id'] == source]
-        ax.hist(source_df['energy'], bins=30, alpha=0.6, label=source, 
-               color=colors[i % 2], edgecolor='white')
-    
+        ax.hist(source_df['energy'], bins=30, alpha=0.6, label=source,
+               color=_PALETTE[i % len(_PALETTE)], edgecolor='white')
+
     ax.set_xlabel('Daily Energy (kWh)', fontsize=12)
     ax.set_ylabel('Frequency (days)', fontsize=12)
     ax.set_title('Distribution of Daily Energy Production', fontsize=14, fontweight='bold')
     ax.legend()
     ax.grid(True, alpha=0.3, axis='y')
 
-    for i, source in enumerate(sorted(df['source_id'].unique())):
+    for i, source in enumerate(sources):
         source_df = df[df['source_id'] == source]
         mean_val = source_df['energy'].mean()
-        ax.axvline(mean_val, color=colors[i % 2], linestyle='--', linewidth=2)
+        color = _PALETTE[i % len(_PALETTE)]
+        ax.axvline(mean_val, color=color, linestyle='--', linewidth=2)
         ax.text(mean_val, ax.get_ylim()[1]*0.9, f'{source}\nmean: {mean_val:,.0f}',
-               ha='center', fontsize=9, color=colors[i % 2])
+               ha='center', fontsize=9, color=color)
     
     plt.tight_layout()
     if save_path:
@@ -282,21 +290,3 @@ def create_all_charts(df: pd.DataFrame, output_folder: str = "outputs"):
     plot_distribution(df, f"{output_folder}/distribution.png")
     
     print(f"\nAll charts saved to {output_folder}/")
-
-
-# Keep old functions for compatibility
-def plot_time_alignment(df_before, df_after, source_id=None, save_path=None):
-    """Plot time alignment (for sub-hourly data only)."""
-    print("Note: Time alignment chart is for sub-hourly data. Skipping.")
-
-
-def print_time_alignment_report(df_before, df_after):
-    """Print data summary."""
-    print("=" * 60)
-    print("DATA SUMMARY")
-    print("=" * 60)
-    print(f"Total rows: {len(df_after):,}")
-    print(f"Date range: {df_after['timestamp'].min()} to {df_after['timestamp'].max()}")
-    if 'energy' in df_after.columns:
-        print(f"Total energy: {df_after['energy'].sum():,.2f} kWh")
-    print("=" * 60)
