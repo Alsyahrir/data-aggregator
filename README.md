@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-A Python library — with a Next.js/FastAPI web app and a Streamlit interface — for aggregating solar panel data from multiple sources with LLM-assisted schema detection, weather enrichment, anomaly detection, and energy forecasting.
+A Python library for aggregating solar panel data from multiple sources — with LLM-assisted schema detection, weather enrichment, anomaly detection, and energy forecasting.
 
 ## Features
 
@@ -16,19 +16,19 @@ A Python library — with a Next.js/FastAPI web app and a Streamlit interface �
 - **Anomaly detection** (IQR or Z-score based) with flag/drop/clip strategies
 - **Weather enrichment** via Open-Meteo (free, no API key)
 - **Energy forecasting** with Random Forest + weather scenario analysis
-- **Interactive dashboard** with Plotly / Chart.js charts
+- **Chart helpers** built on matplotlib (production, monthly, quality, weekly pattern, distribution)
 - **Schema extensibility** — register custom fields at runtime
 
 ## Architecture
 
 ```
-Upload → Detect Columns → Standardise → Merge → Align → Aggregate
-                                                          ↓
-                                          Anomaly Detection (flag/drop/clip)
-                                                          ↓
-                                            Weather Enrichment (Open-Meteo)
-                                                          ↓
-                                              Forecasting (Random Forest)
+Load → Detect Columns → Standardise → Merge → Align → Aggregate
+                                                        ↓
+                                        Anomaly Detection (flag/drop/clip)
+                                                        ↓
+                                          Weather Enrichment (Open-Meteo)
+                                                        ↓
+                                            Forecasting (Random Forest)
 ```
 
 ## Installation
@@ -46,30 +46,9 @@ pip install -e ".[forecast]"  # just scikit-learn forecasting
 pip install -e ".[viz]"       # just matplotlib charts
 ```
 
-To also run the web apps (Next.js/FastAPI, Streamlit) or the test suite:
-
-```bash
-pip install -r requirements.txt   # everything, including app-only deps
-npm install                       # Next.js frontend deps
-```
-
 ## Quick Start
 
-### Web Interface (Next.js + FastAPI, deployed on Vercel)
-
-```bash
-npm install
-npm run dev            # Next.js frontend on http://localhost:3000
-uvicorn api.index:app --reload --port 8000   # FastAPI backend, in a second terminal
-```
-
-### Web Interface (Streamlit, local/legacy)
-
-```bash
-streamlit run app.py
-```
-
-### Basic Usage (Python)
+### Basic Usage
 
 ```python
 from solstice import Solstice
@@ -136,6 +115,14 @@ df_flagged = detect_anomalies(df, method="iqr")
 df_clean = auto_clean(df, strategy="drop")
 ```
 
+### Visualization
+
+```python
+from solstice import create_all_charts
+
+create_all_charts(df, output_folder="outputs")
+```
+
 ### Custom Schema Fields
 
 ```python
@@ -158,12 +145,11 @@ solstice/
 ├── visualization.py      # Matplotlib plotting functions
 ├── weather.py             # Open-Meteo weather enrichment
 └── forecasting.py        # Random Forest forecasting
-api/
-└── index.py               # FastAPI backend (Vercel serverless function)
-src/app/
-├── page.jsx               # Next.js frontend (upload/detect/aggregate/forecast UI)
-├── layout.jsx
-└── globals.css
+examples/
+├── example_usage.py       # Basic keyword-detection usage
+├── example_llm_usage.py   # LLM-powered detection
+├── example_llm_OEDI.py    # LLM detection against the OEDI sample dataset
+└── visualization.py       # Chart generation walkthrough
 tests/
 ├── test_schema.py         # Schema unit tests
 ├── test_detection.py      # Detection unit tests

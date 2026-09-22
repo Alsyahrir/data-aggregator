@@ -1,8 +1,8 @@
 """
 Solar Energy Forecasting Module
 
-Extracts the forecasting logic from the Colab notebook into a reusable
-module that can be called from the Streamlit app or standalone scripts.
+Random Forest forecasting for daily solar energy production, built on the
+research in Solar_Weather_Forecasting.ipynb.
 
 Usage:
     from solstice.forecasting import SolarForecaster

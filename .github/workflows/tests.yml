@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [main, vercel-deploy]
+    branches: [main]
   pull_request:
-    branches: [main, vercel-deploy]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
