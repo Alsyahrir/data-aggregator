@@ -34,10 +34,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-llm = ["groq>=0.4.0"]
+# GroqProvider, OpenAIProvider, and OpenAICompatibleProvider (local models,
+# Together, Fireworks, etc.) all speak the OpenAI chat-completions shape, so
+# one dependency covers all three — see solstice.llm_providers.
+llm = ["openai>=1.0.0"]
+llm-anthropic = ["anthropic>=0.25.0"]
 forecast = ["scikit-learn>=1.3.0"]
 viz = ["matplotlib>=3.7.0"]
-all = ["groq>=0.4.0", "scikit-learn>=1.3.0", "matplotlib>=3.7.0"]
+all = ["openai>=1.0.0", "anthropic>=0.25.0", "scikit-learn>=1.3.0", "matplotlib>=3.7.0"]
 dev = ["pytest>=7.0.0"]
 
 [project.urls]
