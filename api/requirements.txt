@@ -1,0 +1,11 @@
+# Dependencies for the Vercel Python serverless function (api/index.py).
+# Kept intentionally minimal — Vercel uses the requirements.txt closest to
+# the function file, so this takes precedence over the root requirements.txt
+# (which also carries the Streamlit app + notebook/dev-only dependencies).
+fastapi>=0.110.0
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+openpyxl>=3.1.0
+python-multipart>=0.0.9
+groq>=0.4.0

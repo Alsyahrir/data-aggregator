@@ -1,0 +1,12 @@
+# Not needed by the deployed app (Next.js frontend + api/index.py FastAPI function).
+# Keeps the deployment and the Python function bundle lean.
+Data/
+outputs/
+examples/
+tests/
+Solar_Weather_Forecasting.ipynb
+app.py
+.streamlit/
+.pytest_cache/
+__pycache__/
+*.pyc
