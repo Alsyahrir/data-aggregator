@@ -2,7 +2,7 @@ import os
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from .schema import SCHEMA, get_aggregation_rules
 
@@ -42,16 +42,30 @@ def load_file(filepath: str) -> pd.DataFrame:
 def standardise_dataframe(
     df: pd.DataFrame,
     mapping: Dict[str, str],
-    source_id: str
+    source_id: str,
+    dayfirst: Optional[bool] = None,
 ) -> pd.DataFrame:
-    """Standardise DataFrame - keeps all columns, renames mapped ones."""
+    """Standardise DataFrame - keeps all columns, renames mapped ones.
+
+    Args:
+        dayfirst: How to read ambiguous dates like 03/11/2025.
+            True  -> day first (11 March), the European/Asian convention.
+            False -> month first (3 November), the US convention.
+            None  -> let pandas infer (default). Ambiguous all-numeric dates
+                     are guessed, so pass this explicitly when you know the
+                     source format — silently reading US data as day-first
+                     shifts every date into the wrong month.
+    """
     df_out = df.copy()
 
     rename_dict = {src: tgt for src, tgt in mapping.items() if src in df_out.columns}
     df_out = df_out.rename(columns=rename_dict)
 
     if "timestamp" in df_out.columns:
-        df_out["timestamp"] = pd.to_datetime(df_out["timestamp"], format='mixed', dayfirst=True)
+        kwargs = {"format": "mixed"}
+        if dayfirst is not None:
+            kwargs["dayfirst"] = dayfirst
+        df_out["timestamp"] = pd.to_datetime(df_out["timestamp"], **kwargs)
 
     if "source_id" not in df_out.columns:
         df_out["source_id"] = source_id
@@ -66,10 +80,14 @@ def standardise_dataframe(
 def merge_with_environment(
     inverter_df: pd.DataFrame,
     environment_dfs: Optional[List[pd.DataFrame]] = None,
-    irradiance_df: Optional[pd.DataFrame] = None,
+    irradiance_df: Optional[Union[pd.DataFrame, List[pd.DataFrame]]] = None,
     tolerance: str = '15min'
 ) -> pd.DataFrame:
-    """Merge inverter data with environmental data using nearest timestamp."""
+    """Merge inverter data with environmental data using nearest timestamp.
+
+    `irradiance_df` accepts a single DataFrame or a list of them (multiple
+    sensors); the first one carrying an `irradiance` column is used.
+    """
     df = inverter_df.copy().sort_values('timestamp').reset_index(drop=True)
     
     if environment_dfs:
@@ -90,19 +108,26 @@ def merge_with_environment(
                     direction='nearest'
                 )
     
-    if irradiance_df is not None and 'irradiance' in irradiance_df.columns and 'irradiance' not in df.columns:
-        irr_sorted = (
-            irradiance_df[['timestamp', 'irradiance']]
-            .drop_duplicates(subset='timestamp')
-            .sort_values('timestamp')
-            .reset_index(drop=True)
+    if irradiance_df is not None and 'irradiance' not in df.columns:
+        irradiance_dfs = (
+            irradiance_df if isinstance(irradiance_df, list) else [irradiance_df]
         )
-        df = pd.merge_asof(
-            df, irr_sorted,
-            on='timestamp',
-            tolerance=pd.Timedelta(tolerance),
-            direction='nearest'
-        )
+        for irr_df in irradiance_dfs:
+            if irr_df is None or 'irradiance' not in irr_df.columns:
+                continue
+            irr_sorted = (
+                irr_df[['timestamp', 'irradiance']]
+                .drop_duplicates(subset='timestamp')
+                .sort_values('timestamp')
+                .reset_index(drop=True)
+            )
+            df = pd.merge_asof(
+                df, irr_sorted,
+                on='timestamp',
+                tolerance=pd.Timedelta(tolerance),
+                direction='nearest'
+            )
+            break
     
     return df
 

@@ -164,3 +164,18 @@ class TestAnomalyDetection:
     def test_no_anomalies_in_clean_data(self, sample_df):
         result = detect_anomalies(sample_df, columns=["energy"])
         assert result["is_anomaly"].sum() == 0 or result["is_anomaly"].sum() < len(sample_df) * 0.1
+
+
+class TestDayfirstIsExplicit:
+    """Dates like 03/11/2025 are ambiguous; the convention must be callable-
+    controlled rather than hardcoded to day-first."""
+
+    def test_dayfirst_controls_ambiguous_dates(self):
+        df = pd.DataFrame({"timestamp": ["03/11/2025"], "energy": [1.0]})
+        mapping = {"timestamp": "timestamp", "energy": "energy"}
+
+        day = standardise_dataframe(df, mapping, "A", dayfirst=True)["timestamp"][0]
+        month = standardise_dataframe(df, mapping, "A", dayfirst=False)["timestamp"][0]
+
+        assert (day.day, day.month) == (3, 11)
+        assert (month.day, month.month) == (11, 3)
