@@ -83,3 +83,40 @@ class TestAutoDetectColumns:
         })
         mapping, _ = auto_detect_columns(df)
         assert mapping.get("panel_temp") == "module_temp"
+
+
+class TestScoringBeatsColumnOrder:
+    """Detection used to be first-match-wins, so a weak match could claim a
+    field and leave the real column unmapped depending on column order."""
+
+    def test_weak_match_does_not_steal_timestamp(self):
+        # "downtime_minutes" contains "time" but is not a timestamp.
+        df = pd.DataFrame({
+            "downtime_minutes": [5, 6],
+            "Measured_on": ["2024-01-01", "2024-01-02"],
+            "energy_kwh": [2.0, 3.0],
+        })
+        mapping, _ = auto_detect_columns(df)
+        assert mapping.get("Measured_on") == "timestamp"
+        assert "downtime_minutes" not in mapping
+
+    def test_result_is_independent_of_column_order(self):
+        cols = {
+            "Measured_on": ["2024-01-01", "2024-01-02"],
+            "downtime_minutes": [5, 6],
+            "energy_kwh": [2.0, 3.0],
+        }
+        forward = auto_detect_columns(pd.DataFrame(cols))[0]
+        reversed_ = auto_detect_columns(pd.DataFrame({k: cols[k] for k in reversed(list(cols))}))[0]
+        assert forward == reversed_
+
+    def test_prefers_column_that_holds_real_dates(self):
+        """A 'Timestamp' column holding only a constant time-of-day should
+        lose to a 'Date' column that actually spans dates."""
+        df = pd.DataFrame({
+            "Date": ["01-05-2025", "02-05-2025"],
+            "Timestamp": ["12:00:00 am", "12:00:00 am"],
+            "energy": [1.0, 2.0],
+        })
+        mapping, _ = auto_detect_columns(df)
+        assert mapping.get("Date") == "timestamp"

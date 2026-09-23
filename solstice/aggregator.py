@@ -23,7 +23,7 @@ class Solstice:
         self.verbose = verbose
         self._inverter_data: List[pd.DataFrame] = []
         self._environment_data: List[pd.DataFrame] = []
-        self._irradiance_data: Optional[pd.DataFrame] = None
+        self._irradiance_data: List[pd.DataFrame] = []
         self._files_loaded: List[str] = []
         self._mappings: Dict[str, Dict] = {}
         self._merged_df: Optional[pd.DataFrame] = None
@@ -39,8 +39,21 @@ class Solstice:
         self._aligned_df = None
         self._aggregated_df = None
     
-    def add_file(self, filepath: str, source_id: Optional[str] = None, mapping: Optional[Dict[str, str]] = None) -> 'Solstice':
-        """Add a data file."""
+    def add_file(
+        self,
+        filepath: str,
+        source_id: Optional[str] = None,
+        mapping: Optional[Dict[str, str]] = None,
+        dayfirst: Optional[bool] = None,
+    ) -> 'Solstice':
+        """Add a data file.
+
+        Args:
+            dayfirst: Date convention for ambiguous values like 03/11/2025.
+                True for day-first (11 March), False for US month-first
+                (3 November), None to let pandas infer. Set it explicitly
+                when you know the source format.
+        """
         filename = os.path.basename(filepath)
         self._log(f"\nAdding: {filename}")
         self._log("-" * 50)
@@ -59,7 +72,7 @@ class Solstice:
         if source_id is None:
             source_id = filename.replace(".csv", "").replace(".xlsx", "").replace("_data", "").upper()
         
-        df_std = standardise_dataframe(df, mapping, source_id)
+        df_std = standardise_dataframe(df, mapping, source_id, dayfirst=dayfirst)
         self._log(f"  Columns: {list(df_std.columns)}")
         
         self._store_data(df_std, file_type)
@@ -76,7 +89,7 @@ class Solstice:
             self._inverter_data.append(df)
             self._log(f"  Stored as: INVERTER")
         elif file_type == "irradiance":
-            self._irradiance_data = df
+            self._irradiance_data.append(df)
             self._log(f"  Stored as: IRRADIANCE")
         else:
             self._environment_data.append(df)
@@ -96,7 +109,11 @@ class Solstice:
 
         merged_list = []
         for inv_df in self._inverter_data:
-            merged = merge_with_environment(inv_df, self._environment_data or None, self._irradiance_data)
+            merged = merge_with_environment(
+                inv_df,
+                self._environment_data or None,
+                self._irradiance_data or None,
+            )
             merged_list.append(merged)
 
         self._merged_df = pd.concat(merged_list, ignore_index=True).sort_values(['timestamp', 'source_id'])
