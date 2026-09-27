@@ -83,6 +83,24 @@ async function parseErrorResponse(res) {
   }
 }
 
+const KEY_PLACEHOLDER = {
+  groq: 'gsk_...',
+  openai: 'sk-...',
+  anthropic: 'sk-ant-...',
+  compatible: 'key (or any value if unauthenticated)',
+};
+
+const fieldStyle = (width) => ({
+  background: 'rgba(12, 14, 20, 0.8)',
+  border: '1px solid var(--border-subtle)',
+  color: 'var(--text-main)',
+  padding: '6px 12px',
+  borderRadius: '8px',
+  fontSize: '0.85rem',
+  width: `${width}px`,
+  outline: 'none',
+});
+
 const SCHEMA_FIELDS = [
   { name: 'timestamp', req: true, unit: 'ISO / Date', desc: 'Date and time of record' },
   { name: 'energy', req: false, unit: 'kWh / MWh', desc: 'Solar generation yield' },
@@ -106,6 +124,12 @@ export default function SolsticePage() {
   const [detectionResults, setDetectionResults] = useState([]);
   const [mappings, setMappings] = useState({});
   const [groqKey, setGroqKey] = useState('');
+  const [llmProvider, setLlmProvider] = useState('groq');
+  const [llmBaseUrl, setLlmBaseUrl] = useState('');
+  const [llmModel, setLlmModel] = useState('');
+  const [providerOptions, setProviderOptions] = useState([]);
+  const selectedProvider =
+    providerOptions.find((p) => p.id === llmProvider) || { default_models: [] };
   const [showSchema, setShowSchema] = useState(false);
 
   // Step 2: Settings
@@ -125,6 +149,11 @@ export default function SolsticePage() {
 
   // Check API health on mount
   useEffect(() => {
+    fetch('/api/llm-providers')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setProviderOptions(d.providers || []))
+      .catch(() => {});
+
     fetch('/api/health')
       .then((res) => res.json())
       .then((data) => {
@@ -149,6 +178,32 @@ export default function SolsticePage() {
     }
   };
 
+  // Build the multipart payload for the pipeline. Shared by /api/process and
+  // the full export so an export re-runs on byte-identical inputs.
+  const buildPipelineFormData = async () => {
+    const hasLargeFiles = uploadedFiles.some(
+      (f) => f.size > FILE_PROCESSING_THRESHOLDS.processPreAggBytes
+    );
+    const formData = new FormData();
+    const finalMappings = {};
+    const { prepareFileForProcessing } = hasLargeFiles
+      ? await loadFileProcessing()
+      : { prepareFileForProcessing: async (f, m) => ({ file: f, mapping: m }) };
+    for (const f of uploadedFiles) {
+      const originalMapping = mappings[f.name] || {};
+      const { file: uploadFile, mapping: uploadMapping } =
+        await prepareFileForProcessing(f, originalMapping, freq);
+      formData.append('files', uploadFile);
+      finalMappings[uploadFile.name] = uploadMapping;
+    }
+    formData.append('mappings_json', JSON.stringify(finalMappings));
+    formData.append('freq', freq);
+    formData.append('anomaly_enabled', String(anomalyEnabled));
+    formData.append('anomaly_method', anomalyMethod);
+    formData.append('anomaly_strategy', anomalyStrategy);
+    return formData;
+  };
+
   // Call /api/detect
   const processFilesDetection = async (files) => {
     setLoading(true);
@@ -171,6 +226,9 @@ export default function SolsticePage() {
       sampledFiles.forEach((f) => formData.append('files', f));
       if (groqKey.trim()) {
         formData.append('llm_api_key', groqKey.trim());
+        formData.append('llm_provider', llmProvider);
+        if (llmBaseUrl.trim()) formData.append('llm_base_url', llmBaseUrl.trim());
+        if (llmModel.trim()) formData.append('llm_model', llmModel.trim());
       }
 
       const res = await fetch('/api/detect', {
@@ -244,22 +302,7 @@ export default function SolsticePage() {
       // limit), so they're aggregated to the target frequency client-side
       // first, using the same SUM/MEAN rules the server would apply. Their
       // mapping becomes an identity map since columns are already renamed.
-      const formData = new FormData();
-      const finalMappings = {};
-      const { prepareFileForProcessing } = hasLargeFiles
-        ? await loadFileProcessing()
-        : { prepareFileForProcessing: async (f, m) => ({ file: f, mapping: m }) };
-      for (const f of uploadedFiles) {
-        const originalMapping = mappings[f.name] || {};
-        const { file: uploadFile, mapping: uploadMapping } = await prepareFileForProcessing(f, originalMapping, freq);
-        formData.append('files', uploadFile);
-        finalMappings[uploadFile.name] = uploadMapping;
-      }
-      formData.append('mappings_json', JSON.stringify(finalMappings));
-      formData.append('freq', freq);
-      formData.append('anomaly_enabled', String(anomalyEnabled));
-      formData.append('anomaly_method', anomalyMethod);
-      formData.append('anomaly_strategy', anomalyStrategy);
+      const formData = await buildPipelineFormData();
 
       const res = await fetch('/api/process', {
         method: 'POST',
@@ -369,15 +412,41 @@ export default function SolsticePage() {
   const handleExport = async (format) => {
     if (!processedData || !processedData.records) return;
 
+    // /api/process trims its reply to fit the response size cap, so when the
+    // result was truncated the browser only holds a prefix. Exporting that
+    // would hand over a silently incomplete file — re-run server-side from
+    // the original uploads instead so the download has every row.
+    const truncated = Boolean(processedData.summary && processedData.summary.truncated);
+
+    setLoading(true);
+    setLoadingMsg(
+      truncated
+        ? 'Rebuilding the full dataset for export...'
+        : 'Preparing your download...'
+    );
+
     try {
-      const res = await fetch('/api/export', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          records: processedData.records,
-          format: format,
-        }),
-      });
+      let res;
+      if (truncated) {
+        const formData = await buildPipelineFormData();
+        formData.append('export_format', format);
+        if (weatherEnriched) {
+          formData.append('latitude', String(lat));
+          formData.append('longitude', String(lon));
+        }
+        res = await fetch('/api/export-full', { method: 'POST', body: formData });
+      } else {
+        res = await fetch('/api/export', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ records: processedData.records, format }),
+        });
+      }
+
+      // Without this the error body downloads as a .csv named like a result.
+      if (!res.ok) {
+        throw new Error(await parseErrorResponse(res));
+      }
 
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
@@ -389,6 +458,8 @@ export default function SolsticePage() {
       a.remove();
     } catch (err) {
       setErrorMsg('Export failed: ' + err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -671,28 +742,60 @@ export default function SolsticePage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
               <Sparkles size={18} color="#e8a051" />
               <div>
-                <div style={{ fontSize: '0.88rem', fontWeight: 600 }}>LLM Schema Detective (Groq API)</div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 600 }}>LLM Schema Detective</div>
                 <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
                   Optional: AI assisted mapping for non-standard or foreign column names
                 </div>
               </div>
             </div>
-            <input
-              type="password"
-              placeholder="gsk_..."
-              value={groqKey}
-              onChange={(e) => setGroqKey(e.target.value)}
-              style={{
-                background: 'rgba(12, 14, 20, 0.8)',
-                border: '1px solid var(--border-subtle)',
-                color: 'var(--text-main)',
-                padding: '6px 12px',
-                borderRadius: '8px',
-                fontSize: '0.85rem',
-                width: '240px',
-                outline: 'none',
-              }}
-            />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <select
+                value={llmProvider}
+                onChange={(e) => setLlmProvider(e.target.value)}
+                style={fieldStyle(130)}
+                aria-label="LLM provider"
+              >
+                {(providerOptions.length ? providerOptions : [{ id: 'groq', label: 'Groq' }]).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                type="password"
+                placeholder={KEY_PLACEHOLDER[llmProvider] || 'API key'}
+                value={groqKey}
+                onChange={(e) => setGroqKey(e.target.value)}
+                style={fieldStyle(200)}
+                aria-label="LLM API key"
+              />
+
+              {selectedProvider.needs_base_url && (
+                <input
+                  type="text"
+                  placeholder="http://localhost:11434/v1"
+                  value={llmBaseUrl}
+                  onChange={(e) => setLlmBaseUrl(e.target.value)}
+                  style={fieldStyle(220)}
+                  aria-label="Base URL"
+                />
+              )}
+
+              <input
+                type="text"
+                placeholder={
+                  selectedProvider.needs_model
+                    ? 'model name (required)'
+                    : `model (default: ${(selectedProvider.default_models || [])[0] || 'auto'})`
+                }
+                value={llmModel}
+                onChange={(e) => setLlmModel(e.target.value)}
+                style={fieldStyle(selectedProvider.needs_model ? 180 : 210)}
+                aria-label="Model"
+              />
+            </div>
           </div>
 
           {/* Detection Results */}

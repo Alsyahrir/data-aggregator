@@ -6,6 +6,7 @@ Built with FastAPI, interfacing with the solstice core engine.
 import sys
 import os
 import io
+import gzip
 import json
 import tempfile
 import traceback
@@ -22,6 +23,12 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from solstice import Solstice, LLMAnalyzer
+from solstice.llm_providers import (
+    GroqProvider,
+    OpenAIProvider,
+    AnthropicProvider,
+    OpenAICompatibleProvider,
+)
 from solstice.schema import SCHEMA
 from solstice.detection import auto_detect_columns
 from solstice.processing import (
@@ -58,6 +65,54 @@ app.add_middleware(
 
 
 SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+
+# Provider id -> (label, class). "compatible" covers any OpenAI-shaped
+# endpoint the user points us at: Together, Fireworks, DeepInfra, a
+# self-hosted Ollama/vLLM, a corporate gateway.
+LLM_PROVIDERS = {
+    "groq": ("Groq", GroqProvider),
+    "openai": ("OpenAI", OpenAIProvider),
+    "anthropic": ("Anthropic", AnthropicProvider),
+    "compatible": ("OpenAI-compatible", OpenAICompatibleProvider),
+}
+
+
+def build_provider(
+    provider_id: str,
+    api_key: str,
+    base_url: Optional[str] = None,
+    model: Optional[str] = None,
+):
+    """Construct an LLMProvider from the options the UI sends."""
+    provider_id = (provider_id or "groq").lower()
+    if provider_id not in LLM_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown LLM provider '{provider_id}'. "
+                f"Choose one of: {', '.join(sorted(LLM_PROVIDERS))}."
+            ),
+        )
+
+    models = [model.strip()] if model and model.strip() else None
+
+    if provider_id == "compatible":
+        if not base_url or not base_url.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="An OpenAI-compatible provider needs a base URL (e.g. http://localhost:11434/v1).",
+            )
+        if not models:
+            raise HTTPException(
+                status_code=400,
+                detail="An OpenAI-compatible provider needs an explicit model name.",
+            )
+        return OpenAICompatibleProvider(
+            api_key=api_key, models=models, base_url=base_url.strip()
+        )
+
+    _, cls = LLM_PROVIDERS[provider_id]
+    return cls(api_key=api_key, models=models)
 
 # Trimmed hyperparameter grid for the serverless forecast path — see the
 # note in forecast_endpoint(). The library's richer default still applies
@@ -139,6 +194,9 @@ def df_to_records(df: pd.DataFrame, max_rows: Optional[int] = None) -> List[Dict
 # message. Budget below the cap and leave room for the rest of the payload.
 MAX_RESPONSE_RECORD_BYTES = 3_500_000
 
+# A download shares the same platform response cap as a JSON reply.
+MAX_DOWNLOAD_BYTES = 4_000_000
+
 # Never serialise more than this many rows just to measure them.
 _SIZE_SAMPLE_ROWS = 200
 
@@ -193,11 +251,32 @@ def get_schema():
     return {"fields": fields}
 
 
+@app.get("/api/llm-providers")
+def list_llm_providers():
+    """Providers the UI can offer. Kept server-side so the options can't
+    drift from what the backend actually supports."""
+    return {
+        "providers": [
+            {
+                "id": pid,
+                "label": label,
+                "needs_base_url": pid == "compatible",
+                "needs_model": pid == "compatible",
+                "default_models": list(getattr(cls, "DEFAULT_MODELS", []) or []),
+            }
+            for pid, (label, cls) in LLM_PROVIDERS.items()
+        ]
+    }
+
+
 @app.post("/api/detect")
 async def detect_columns_endpoint(
     files: List[UploadFile] = File(...),
     groq_api_key: Optional[str] = Form(None),
     llm_api_key: Optional[str] = Form(None),
+    llm_provider: str = Form("groq"),
+    llm_base_url: Optional[str] = Form(None),
+    llm_model: Optional[str] = Form(None),
 ):
     """
     Accepts uploaded files, parses headers and sample rows, and performs
@@ -264,7 +343,10 @@ async def detect_columns_endpoint(
                     tmp.write(contents)
                     tmp_path = tmp.name
 
-                analyzer = LLMAnalyzer(api_key=llm_key.strip(), verbose=False)
+                provider = build_provider(
+                    llm_provider, llm_key.strip(), llm_base_url, llm_model
+                )
+                analyzer = LLMAnalyzer(provider=provider, verbose=False)
                 analyzer.add_file(tmp_path)
                 llm_res = analyzer.analyze()
                 if llm_res.files:
@@ -273,6 +355,8 @@ async def detect_columns_endpoint(
                     file_type = fa.file_type
                     detection_method = "llm"
                     confidence = fa.confidence
+            except HTTPException:
+                raise
             except Exception as e:
                 # Keyword detection still stands, but say why the LLM pass
                 # didn't help — a silent no-op here looks like a broken key.
@@ -302,6 +386,77 @@ async def detect_columns_endpoint(
     return {"files": results, "skipped": skipped}
 
 
+async def run_pipeline(
+    files: List[UploadFile],
+    mappings_json: str,
+    freq: str,
+    anomaly_enabled: bool,
+    anomaly_method: str,
+    anomaly_strategy: str,
+) -> Tuple[pd.DataFrame, int]:
+    """Run the full aggregation pipeline over uploaded files.
+
+    Shared by /api/process and /api/export so an export is guaranteed to be
+    the same data the user saw, rather than a separately-assembled frame that
+    can drift from it.
+
+    Returns (aggregated_df, anomaly_count).
+    """
+    try:
+        mappings_dict = json.loads(mappings_json)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid mappings JSON: {str(e)}")
+
+    temp_files = []
+    try:
+        agg = Solstice(verbose=False)
+
+        for uf in files:
+            contents = await uf.read()
+            filename = uf.filename or "file.csv"
+            ext = os.path.splitext(filename)[1].lower()
+
+            if ext not in SUPPORTED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"'{filename}' is not a supported file type. "
+                        f"Upload one of: {', '.join(sorted(SUPPORTED_EXTENSIONS))}."
+                    ),
+                )
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                tmp.write(contents)
+                tmp_path = tmp.name
+                temp_files.append(tmp_path)
+
+            file_mapping = mappings_dict.get(filename, {})
+            source_id = os.path.splitext(filename)[0].replace("_data", "").upper()
+            agg.add_file(filepath=tmp_path, source_id=source_id, mapping=file_mapping)
+
+        aggregated_df = agg.aggregate(freq=freq)
+
+        anomaly_count = 0
+        if anomaly_enabled:
+            pre_len = len(aggregated_df)
+            aggregated_df = auto_clean(
+                aggregated_df, strategy=anomaly_strategy, method=anomaly_method
+            )
+            if "is_anomaly" in aggregated_df.columns:
+                anomaly_count = int(aggregated_df["is_anomaly"].sum())
+            elif anomaly_strategy == "drop":
+                anomaly_count = pre_len - len(aggregated_df)
+
+        return aggregated_df, anomaly_count
+    finally:
+        for p in temp_files:
+            if os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
+
 @app.post("/api/process")
 async def process_data_endpoint(
     files: List[UploadFile] = File(...),
@@ -317,41 +472,9 @@ async def process_data_endpoint(
     aggregation, and anomaly detection.
     """
     try:
-        mappings_dict = json.loads(mappings_json)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid mappings JSON: {str(e)}")
-
-    temp_files = []
-
-    try:
-        agg = Solstice(verbose=False)
-
-        for uf in files:
-            contents = await uf.read()
-            filename = uf.filename or "file.csv"
-            ext = os.path.splitext(filename)[1].lower()
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                tmp.write(contents)
-                tmp_path = tmp.name
-                temp_files.append(tmp_path)
-
-            file_mapping = mappings_dict.get(filename, {})
-            source_id = filename.replace(".csv", "").replace(".xlsx", "").replace(".xls", "").replace("_data", "").upper()
-            agg.add_file(filepath=tmp_path, source_id=source_id, mapping=file_mapping)
-
-        # Run aggregation
-        aggregated_df = agg.aggregate(freq=freq)
-
-        # Anomaly detection & handling
-        anomaly_count = 0
-        if anomaly_enabled:
-            pre_len = len(aggregated_df)
-            aggregated_df = auto_clean(aggregated_df, strategy=anomaly_strategy, method=anomaly_method)
-            if "is_anomaly" in aggregated_df.columns:
-                anomaly_count = int(aggregated_df["is_anomaly"].sum())
-            elif anomaly_strategy == "drop":
-                anomaly_count = pre_len - len(aggregated_df)
+        aggregated_df, anomaly_count = await run_pipeline(
+            files, mappings_json, freq, anomaly_enabled, anomaly_method, anomaly_strategy
+        )
 
         # Summary calculations
         total_energy = None
@@ -399,16 +522,11 @@ async def process_data_endpoint(
             "records": records,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Aggregation error: {str(e)}")
-    finally:
-        for p in temp_files:
-            if os.path.exists(p):
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
 
 
 @app.post("/api/enrich-weather")
@@ -534,6 +652,97 @@ async def forecast_endpoint(
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Forecasting failed: {str(e)}")
+
+
+def _dataframe_download(df: pd.DataFrame, export_format: str) -> Response:
+    """Serialise a frame as a downloadable CSV or xlsx.
+
+    CSV is gzipped: Vercel's 4.5MB response cap applies to the bytes actually
+    sent, and solar data compresses roughly 5-10x, so this is what makes a
+    full-fidelity export of a large run fit at all. Browsers decompress
+    transparently before saving.
+    """
+    if export_format in ("xlsx", "excel"):
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Solstice_Aggregated")
+        raw = buf.getvalue()
+        if len(raw) > MAX_DOWNLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"The Excel export is {len(raw) / 1e6:.1f}MB, over the "
+                    f"{MAX_DOWNLOAD_BYTES / 1e6:.1f}MB response limit. "
+                    "Export as CSV (compressed, much smaller) or use a "
+                    "coarser aggregation period."
+                ),
+            )
+        return Response(
+            content=raw,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": 'attachment; filename="solstice_aggregated.xlsx"'},
+        )
+
+    packed = gzip.compress(df.to_csv(index=False).encode("utf-8"), compresslevel=6)
+    if len(packed) > MAX_DOWNLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"The export is {len(packed) / 1e6:.1f}MB compressed, over the "
+                f"{MAX_DOWNLOAD_BYTES / 1e6:.1f}MB response limit. Use a coarser "
+                "aggregation period, or split the upload into smaller date ranges."
+            ),
+        )
+    return Response(
+        content=packed,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": 'attachment; filename="solstice_aggregated.csv"',
+            "Content-Encoding": "gzip",
+        },
+    )
+
+
+@app.post("/api/export-full")
+async def export_full_endpoint(
+    files: List[UploadFile] = File(...),
+    mappings_json: str = Form(...),
+    freq: str = Form("1D"),
+    anomaly_enabled: bool = Form(True),
+    anomaly_method: str = Form("iqr"),
+    anomaly_strategy: str = Form("flag"),
+    export_format: str = Form("csv"),
+    latitude: Optional[float] = Form(None),
+    longitude: Optional[float] = Form(None),
+):
+    """Re-run the pipeline from the original files and return every row.
+
+    /api/process trims its JSON to fit the response cap, so the browser only
+    ever holds a prefix of a large result. Exporting that prefix would hand
+    the user a silently incomplete file — so an export re-derives the full
+    frame here instead of serialising whatever the client happens to have.
+    """
+    try:
+        aggregated_df, _ = await run_pipeline(
+            files, mappings_json, freq, anomaly_enabled, anomaly_method, anomaly_strategy
+        )
+
+        # Match the enrichment the user applied in the UI, so the exported
+        # columns line up with the table they were looking at.
+        if latitude is not None and longitude is not None:
+            try:
+                aggregated_df = enrich_with_weather(
+                    aggregated_df, latitude=latitude, longitude=longitude
+                )
+            except Exception:
+                traceback.print_exc()  # export the un-enriched frame rather than failing
+
+        return _dataframe_download(aggregated_df, export_format.lower())
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
 
 
 @app.post("/api/export")
