@@ -99,6 +99,7 @@ export default function SolsticePage() {
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [warnings, setWarnings] = useState([]);
 
   // Step 1: Upload & Detect State
   const [uploadedFiles, setUploadedFiles] = useState([]);
@@ -169,7 +170,7 @@ export default function SolsticePage() {
         : files;
       sampledFiles.forEach((f) => formData.append('files', f));
       if (groqKey.trim()) {
-        formData.append('groq_api_key', groqKey.trim());
+        formData.append('llm_api_key', groqKey.trim());
       }
 
       const res = await fetch('/api/detect', {
@@ -184,6 +185,15 @@ export default function SolsticePage() {
       const data = await res.json();
       setUploadedFiles(files);
       setDetectionResults(data.files || []);
+
+      // Files the server couldn't use, and per-file reasons the LLM pass
+      // didn't run — both used to vanish silently.
+      const notices = [];
+      (data.skipped || []).forEach((s) => notices.push(`${s.filename}: ${s.reason}`));
+      (data.files || []).forEach((f) => {
+        if (f.llm_error) notices.push(`${f.filename}: ${f.llm_error}`);
+      });
+      setWarnings(notices);
 
       // Initialize mappings
       const initialMappings = {};
@@ -262,6 +272,21 @@ export default function SolsticePage() {
 
       const result = await res.json();
       setProcessedData(result);
+
+      // The server trims the row list to fit the platform's response size
+      // cap. Headline totals are still computed over the full dataset, but
+      // the table and any export below reflect only the rows returned.
+      const s = result.summary || {};
+      setWarnings(
+        s.truncated
+          ? [
+              `Showing ${Number(s.returned_rows).toLocaleString()} of ` +
+                `${Number(s.total_rows).toLocaleString()} rows — the response size limit was reached. ` +
+                `Summary totals still cover all rows. Use a coarser aggregation period for the full table.`,
+            ]
+          : []
+      );
+
       setWeatherEnriched(false);
       setForecastData(null);
       setActiveStep(3);
@@ -564,6 +589,40 @@ export default function SolsticePage() {
             className="btn btn-secondary"
             style={{ padding: '4px 12px', fontSize: '0.78rem' }}
             onClick={() => setErrorMsg('')}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {warnings.length > 0 && (
+        <div
+          className="card"
+          style={{
+            borderColor: '#e8a051',
+            background: 'rgba(232, 160, 81, 0.08)',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '12px',
+          }}
+        >
+          <AlertTriangle color="#e8a051" size={22} style={{ flexShrink: 0, marginTop: '2px' }} />
+          <div style={{ flex: 1 }}>
+            <h4 style={{ color: '#e8a051', fontSize: '0.95rem' }}>
+              {warnings.length === 1 ? 'Heads up' : `Heads up (${warnings.length})`}
+            </h4>
+            <ul style={{ margin: '4px 0 0', paddingLeft: '1.1rem' }}>
+              {warnings.map((w, i) => (
+                <li key={i} style={{ color: 'var(--text-main)', fontSize: '0.85rem', marginTop: i ? '4px' : 0 }}>
+                  {w}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <button
+            className="btn btn-secondary"
+            style={{ padding: '4px 12px', fontSize: '0.78rem' }}
+            onClick={() => setWarnings([])}
           >
             Dismiss
           </button>

@@ -9,7 +9,7 @@ import io
 import json
 import tempfile
 import traceback
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Response
@@ -44,13 +44,66 @@ app = FastAPI(
 )
 
 # Enable CORS for Next.js frontend (local dev & production)
+# The frontend is served from the same origin as this function, so CORS is
+# only needed for local dev. allow_origins=["*"] together with
+# allow_credentials=True is rejected by browsers outright, so credentials are
+# off and the wildcard is kept for the dev server.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+SUPPORTED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+
+# Trimmed hyperparameter grid for the serverless forecast path — see the
+# note in forecast_endpoint(). The library's richer default still applies
+# when SolarForecaster is used directly.
+SERVERLESS_PARAM_GRID = {
+    "n_estimators": [100],
+    "max_depth": [10, 20],
+    "min_samples_leaf": [1],
+}
+
+
+def friendly_read_error(exc: Exception) -> str:
+    """Turn a pandas parse failure into something a user can act on.
+
+    Raw messages like "'utf-8' codec can't decode byte 0x89 in position 0"
+    tell the user nothing about what to do next.
+    """
+    msg = str(exc)
+    if isinstance(exc, UnicodeDecodeError) or "codec can't decode" in msg:
+        return (
+            "The file isn't valid UTF-8 text. If it's an Excel workbook, "
+            "save it as .xlsx; if it's a CSV, re-save it with UTF-8 encoding."
+        )
+    if "No columns to parse" in msg:
+        return "The file is empty."
+    if "Error tokenizing data" in msg:
+        return (
+            "The rows don't have a consistent number of columns — check for "
+            "stray commas or a malformed header row."
+        )
+    return msg
+
+
+def friendly_llm_error(exc: Exception) -> str:
+    """Explain why LLM-assisted detection didn't run."""
+    msg = str(exc)
+    low = msg.lower()
+    if "401" in msg or "invalid_api_key" in low or "authentication" in low:
+        return "LLM detection skipped: the API key was rejected."
+    if "429" in msg or "rate limit" in low:
+        return "LLM detection skipped: rate limit reached. Try again shortly."
+    if "pip install" in low or isinstance(exc, ImportError):
+        return "LLM detection skipped: the provider package isn't installed."
+    if "all models failed" in low:
+        return f"LLM detection skipped: no model responded. ({msg[:120]})"
+    return f"LLM detection skipped: {msg[:160]}"
 
 
 def sanitize_val(val: Any) -> Any:
@@ -78,6 +131,41 @@ def df_to_records(df: pd.DataFrame, max_rows: Optional[int] = None) -> List[Dict
             cleaned_row[str(k)] = sanitize_val(v)
         records.append(cleaned_row)
     return records
+
+
+# Vercel caps a serverless function's response body at 4.5MB and rejects
+# anything larger with FUNCTION_RESPONSE_PAYLOAD_TOO_LARGE — which is a
+# platform error page, not our JSON, so the client can't show a useful
+# message. Budget below the cap and leave room for the rest of the payload.
+MAX_RESPONSE_RECORD_BYTES = 3_500_000
+
+# Never serialise more than this many rows just to measure them.
+_SIZE_SAMPLE_ROWS = 200
+
+
+def records_within_budget(
+    df: pd.DataFrame,
+    budget_bytes: int = MAX_RESPONSE_RECORD_BYTES,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Serialise as many rows as fit in the response budget.
+
+    Returns (records, truncated). Row size is estimated from a sample rather
+    than by serialising everything twice, so a 100k-row frame doesn't cost a
+    full render just to find out it's too big.
+    """
+    if df.empty:
+        return [], False
+
+    sample_n = min(len(df), _SIZE_SAMPLE_ROWS)
+    sample = df_to_records(df.head(sample_n))
+    sample_bytes = len(json.dumps(sample, default=str).encode("utf-8"))
+    bytes_per_row = max(sample_bytes / sample_n, 1)
+
+    max_rows = int(budget_bytes // bytes_per_row)
+    if max_rows >= len(df):
+        return df_to_records(df), False
+
+    return df_to_records(df, max_rows=max(max_rows, 1)), True
 
 
 @app.get("/api/health")
@@ -109,17 +197,32 @@ def get_schema():
 async def detect_columns_endpoint(
     files: List[UploadFile] = File(...),
     groq_api_key: Optional[str] = Form(None),
+    llm_api_key: Optional[str] = Form(None),
 ):
     """
     Accepts uploaded files, parses headers and sample rows, and performs
     automated column-to-schema detection with optional Groq LLM assistance.
     """
+    # The library is no longer Groq-only, so the field is now llm_api_key;
+    # groq_api_key stays accepted so an older cached frontend keeps working.
+    llm_key = llm_api_key or groq_api_key
+
     results = []
+    skipped = []
 
     for uf in files:
         contents = await uf.read()
         filename = uf.filename or "uploaded_file.csv"
         ext = os.path.splitext(filename)[1].lower()
+
+        if ext not in SUPPORTED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{filename}' is not a supported file type. "
+                    f"Upload one of: {', '.join(sorted(SUPPORTED_EXTENSIONS))}."
+                ),
+            )
 
         try:
             if ext in [".xlsx", ".xls"]:
@@ -129,10 +232,16 @@ async def detect_columns_endpoint(
         except Exception as e:
             raise HTTPException(
                 status_code=400,
-                detail=f"Could not read '{filename}': {str(e)}"
+                detail=f"Could not read '{filename}': {friendly_read_error(e)}",
             )
 
         if df.empty:
+            # Previously this silently vanished from the results and the UI
+            # just showed nothing, with no hint as to which file was dropped.
+            skipped.append({
+                "filename": filename,
+                "reason": "File has column headers but no data rows.",
+            })
             continue
 
         sample_df = df.head(5)
@@ -146,14 +255,16 @@ async def detect_columns_endpoint(
         detection_method = "keyword"
         confidence = "high" if sufficient else "medium"
 
-        # If confidence is low and Groq key is provided, attempt LLM analysis
-        if not sufficient and groq_api_key and groq_api_key.strip():
+        # If confidence is low and an LLM key is provided, attempt LLM analysis
+        llm_error = None
+        if not sufficient and llm_key and llm_key.strip():
+            tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                     tmp.write(contents)
                     tmp_path = tmp.name
-                
-                analyzer = LLMAnalyzer(api_key=groq_api_key.strip(), verbose=False)
+
+                analyzer = LLMAnalyzer(api_key=llm_key.strip(), verbose=False)
                 analyzer.add_file(tmp_path)
                 llm_res = analyzer.analyze()
                 if llm_res.files:
@@ -162,12 +273,19 @@ async def detect_columns_endpoint(
                     file_type = fa.file_type
                     detection_method = "llm"
                     confidence = fa.confidence
-                
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
             except Exception as e:
-                # Fallback to keyword detection gracefully
-                pass
+                # Keyword detection still stands, but say why the LLM pass
+                # didn't help — a silent no-op here looks like a broken key.
+                llm_error = friendly_llm_error(e)
+            finally:
+                # Must be in finally: on failure the old code never reached
+                # the unlink, leaking into the function's /tmp across warm
+                # invocations.
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
 
         results.append({
             "filename": filename,
@@ -177,10 +295,11 @@ async def detect_columns_endpoint(
             "detection_method": detection_method,
             "confidence": confidence,
             "mapping": mapping,
+            "llm_error": llm_error,
             "sample_rows": df_to_records(sample_df),
         })
 
-    return {"files": results}
+    return {"files": results, "skipped": skipped}
 
 
 @app.post("/api/process")
@@ -257,8 +376,12 @@ async def process_data_endpoint(
 
         sources = list(aggregated_df["source_id"].unique()) if "source_id" in aggregated_df.columns else []
 
+        records, truncated = records_within_budget(aggregated_df)
+
         summary = {
             "total_rows": len(aggregated_df),
+            "returned_rows": len(records),
+            "truncated": truncated,
             "sources": sources,
             "date_range": {"start": date_min, "end": date_max},
             "total_energy": total_energy,
@@ -268,10 +391,12 @@ async def process_data_endpoint(
             "freq": freq,
         }
 
+        # Totals above are computed over the full frame, so the headline
+        # figures stay correct even when the row list is trimmed to fit.
         return {
             "summary": summary,
             "columns": list(aggregated_df.columns),
-            "records": df_to_records(aggregated_df),
+            "records": records,
         }
 
     except Exception as e:
@@ -315,13 +440,17 @@ async def enrich_weather_endpoint(
             if c not in df.columns and c != "date"
         ]
 
+        records, truncated = records_within_budget(enriched_df)
+
         return {
             "weather_columns": weather_cols,
-            "records": df_to_records(enriched_df),
+            "records": records,
             "summary": {
                 "latitude": latitude,
                 "longitude": longitude,
                 "enriched_rows": len(enriched_df),
+                "returned_rows": len(records),
+                "truncated": truncated,
             }
         }
     except Exception as e:
@@ -350,7 +479,11 @@ async def forecast_endpoint(
 
     try:
         forecaster = SolarForecaster()
-        forecaster.fit(df)
+        # A serverless invocation is wall-clock bound, so the library's
+        # default 8-combination grid (x3 CV folds) is too slow here — it ran
+        # ~11s on 730 daily rows, past Vercel's default 10s function limit.
+        # This grid keeps the same shape with a fraction of the fits.
+        forecaster.fit(df, param_grid=SERVERLESS_PARAM_GRID)
         metrics = forecaster.get_metrics()
         scenarios = forecaster.predict_scenarios()
 
