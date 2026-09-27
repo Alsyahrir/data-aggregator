@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .schema import SCHEMA, get_aggregation_rules, print_schema
 from .detection import auto_detect_columns, generate_llm_prompt, parse_llm_response, format_llm_result_for_review
-from .processing import load_file, standardise_dataframe, merge_with_environment, align_timestamps, aggregate_to_period, validate_dataframe
+from .processing import load_file, standardise_dataframe, merge_with_environment, align_timestamps, aggregate_to_period, validate_dataframe, derive_source_id
 
 
 class Solstice:
@@ -70,7 +70,7 @@ class Solstice:
         self._log(f"  Mapping: {mapping}")
         
         if source_id is None:
-            source_id = filename.replace(".csv", "").replace(".xlsx", "").replace("_data", "").upper()
+            source_id = derive_source_id(filename)
         
         df_std = standardise_dataframe(df, mapping, source_id, dayfirst=dayfirst)
         self._log(f"  Columns: {list(df_std.columns)}")

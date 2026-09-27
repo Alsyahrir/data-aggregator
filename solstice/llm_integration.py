@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 
 from .llm_providers import LLMProvider, GroqProvider
+from .processing import derive_source_id
 
 DATA_FIELDS = {"energy", "ambient_temp", "irradiance", "wind_speed", "module_temp", "humidity"}
 
@@ -156,10 +157,7 @@ class LLMAnalyzer:
         clean_mapping = {k: v for k, v in mapping.items() if v != "source_id"}
         all_columns = [c["name"] for c in file_info["columns"]]
         ignored = [c for c in all_columns if c not in clean_mapping]
-        source_id = (
-            filename.replace(".csv", "").replace(".xlsx", "")
-                    .replace("_data", "").upper()
-        )
+        source_id = derive_source_id(filename)
         return FileAnalysis(
             filename=filename,
             filepath=filepath,

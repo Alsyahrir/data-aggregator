@@ -59,7 +59,7 @@ from .schema import (
 )
 from .detection import auto_detect_columns, generate_llm_prompt, parse_llm_response, format_llm_result_for_review
 from .processing import (
-    load_file, standardise_dataframe, merge_with_environment,
+    load_file, standardise_dataframe, merge_with_environment, derive_source_id,
     align_timestamps, aggregate_to_period, validate_dataframe,
     detect_anomalies, auto_clean,
 )
@@ -83,7 +83,7 @@ __all__ = [
     # Detection
     "auto_detect_columns", "generate_llm_prompt",
     # Processing
-    "load_file", "standardise_dataframe", "merge_with_environment",
+    "load_file", "standardise_dataframe", "merge_with_environment", "derive_source_id",
     "align_timestamps", "aggregate_to_period",
     "detect_anomalies", "auto_clean",
     # Visualization

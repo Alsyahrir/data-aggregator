@@ -24,6 +24,20 @@ PHYSICAL_BOUNDS = {
 }
 
 
+def derive_source_id(filename: str) -> str:
+    """Derive a default source_id from a file name.
+
+    Single definition on purpose: the library and the web API both need this,
+    and when they each had their own, `PLANT_A.XLSX` resolved to PLANT_A.XLSX
+    in one and PLANT_A in the other, so the same file got a different id
+    depending on how it was loaded.
+    """
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    if stem.lower().endswith("_data"):
+        stem = stem[: -len("_data")]
+    return stem.upper()
+
+
 def load_file(filepath: str) -> pd.DataFrame:
     """Load data from a CSV or Excel file."""
     if not os.path.exists(filepath):
