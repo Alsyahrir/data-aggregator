@@ -87,7 +87,7 @@ const KEY_PLACEHOLDER = {
   groq: 'gsk_...',
   openai: 'sk-...',
   anthropic: 'sk-ant-...',
-  compatible: 'key (or any value if unauthenticated)',
+  compatible: 'API key (if required)',
 };
 
 const fieldStyle = (width) => ({
@@ -753,7 +753,7 @@ export default function SolsticePage() {
               <select
                 value={llmProvider}
                 onChange={(e) => setLlmProvider(e.target.value)}
-                style={fieldStyle(130)}
+                style={fieldStyle(170)}
                 aria-label="LLM provider"
               >
                 {(providerOptions.length ? providerOptions : [{ id: 'groq', label: 'Groq' }]).map((p) => (
@@ -785,14 +785,15 @@ export default function SolsticePage() {
 
               <input
                 type="text"
-                placeholder={
+                placeholder={selectedProvider.needs_model ? 'model (required)' : 'model (optional)'}
+                title={
                   selectedProvider.needs_model
-                    ? 'model name (required)'
-                    : `model (default: ${(selectedProvider.default_models || [])[0] || 'auto'})`
+                    ? 'Required for an OpenAI-compatible endpoint'
+                    : `Leave blank to use ${(selectedProvider.default_models || [])[0] || 'the provider default'}`
                 }
                 value={llmModel}
                 onChange={(e) => setLlmModel(e.target.value)}
-                style={fieldStyle(selectedProvider.needs_model ? 180 : 210)}
+                style={fieldStyle(160)}
                 aria-label="Model"
               />
             </div>
