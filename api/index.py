@@ -124,6 +124,29 @@ SERVERLESS_PARAM_GRID = {
 }
 
 
+def _coordinate(value: Any, name: str, limit: float, default: float) -> float:
+    """Validate a latitude/longitude from a JSON payload.
+
+    A missing, non-numeric or out-of-range value used to blow up as an
+    unhandled TypeError (a bare 500 with no body) or get forwarded to
+    Open-Meteo and come back as an opaque upstream 400.
+    """
+    if value is None:
+        return default
+    try:
+        coord = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400, detail=f"{name} must be a number, got {value!r}."
+        )
+    if coord != coord or abs(coord) > limit:  # NaN or out of range
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name} must be between -{limit:g} and {limit:g}, got {value!r}.",
+        )
+    return coord
+
+
 def friendly_read_error(exc: Exception) -> str:
     """Turn a pandas parse failure into something a user can act on.
 
@@ -542,8 +565,8 @@ async def enrich_weather_endpoint(
     and merges them with the existing solar aggregation records.
     """
     records = payload.get("records", [])
-    latitude = float(payload.get("latitude", 1.3521))
-    longitude = float(payload.get("longitude", 103.8198))
+    latitude = _coordinate(payload.get("latitude"), "latitude", 90.0, 1.3521)
+    longitude = _coordinate(payload.get("longitude"), "longitude", 180.0, 103.8198)
 
     if not records:
         raise HTTPException(status_code=400, detail="No records provided to enrich.")
@@ -575,6 +598,8 @@ async def enrich_weather_endpoint(
                 "truncated": truncated,
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Weather enrichment failed: {str(e)}")

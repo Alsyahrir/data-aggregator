@@ -176,19 +176,28 @@ export default function SolsticePage() {
       .catch(() => setApiOnline(false));
   }, []);
 
+  // A second drop used to replace the whole set, so adding one more file
+  // meant re-selecting everything. Merge instead, letting a same-named file
+  // stand in for the earlier one.
+  const addFiles = async (incoming) => {
+    const byName = new Map(uploadedFiles.map((f) => [f.name, f]));
+    incoming.forEach((f) => byName.set(f.name, f));
+    await processFilesDetection([...byName.values()]);
+  };
+
   // Handle Drag & Drop Upload
   const handleDrop = async (e) => {
     e.preventDefault();
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const files = Array.from(e.dataTransfer.files);
-      await processFilesDetection(files);
+      await addFiles(Array.from(e.dataTransfer.files));
     }
   };
 
   const handleFileInput = async (e) => {
     if (e.target.files && e.target.files.length > 0) {
-      const files = Array.from(e.target.files);
-      await processFilesDetection(files);
+      await addFiles(Array.from(e.target.files));
+      // Clear the input so re-picking the same filename still fires onChange.
+      e.target.value = '';
     }
   };
 
@@ -389,6 +398,19 @@ export default function SolsticePage() {
   const runWeatherEnrichment = async () => {
     if (!processedData || !processedData.records) return;
 
+    // A blank or out-of-range box used to reach the server and come back as a
+    // bare 500, which told the user nothing about which field was wrong.
+    const latNum = Number(lat);
+    const lonNum = Number(lon);
+    if (lat.trim() === '' || Number.isNaN(latNum) || latNum < -90 || latNum > 90) {
+      setErrorMsg('Latitude must be a number between -90 and 90.');
+      return;
+    }
+    if (lon.trim() === '' || Number.isNaN(lonNum) || lonNum < -180 || lonNum > 180) {
+      setErrorMsg('Longitude must be a number between -180 and 180.');
+      return;
+    }
+
     setLoading(true);
     setLoadingMsg(`Contacting Open-Meteo for coordinates (${lat}, ${lon})...`);
     setErrorMsg('');
@@ -399,8 +421,8 @@ export default function SolsticePage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           records: processedData.records,
-          latitude: parseFloat(lat),
-          longitude: parseFloat(lon),
+          latitude: latNum,
+          longitude: lonNum,
         }),
       });
 
@@ -413,8 +435,19 @@ export default function SolsticePage() {
         ...prev,
         records: result.records,
         weatherColumns: result.weather_columns,
+        // The table renders from `columns`; without this the freshly fetched
+        // weather fields were in the data but invisible on screen.
+        columns: [
+          ...(prev.columns || []),
+          ...(result.weather_columns || []).filter((c) => !(prev.columns || []).includes(c)),
+        ],
       }));
       setWeatherEnriched(true);
+      setWarnings(
+        (result.weather_columns || []).length
+          ? [`Added ${result.weather_columns.length} weather columns — see the Aggregated Data table on the Analytics step.`]
+          : []
+      );
     } catch (err) {
       setErrorMsg(err.message);
     } finally {
