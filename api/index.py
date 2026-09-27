@@ -32,6 +32,7 @@ from solstice.llm_providers import (
 from solstice.schema import SCHEMA
 from solstice.detection import auto_detect_columns
 from solstice.processing import (
+    derive_source_id,
     load_file,
     standardise_dataframe,
     merge_with_environment,
@@ -458,7 +459,7 @@ async def run_pipeline(
                 temp_files.append(tmp_path)
 
             file_mapping = mappings_dict.get(filename, {})
-            source_id = os.path.splitext(filename)[0].replace("_data", "").upper()
+            source_id = derive_source_id(filename)
             agg.add_file(filepath=tmp_path, source_id=source_id, mapping=file_mapping)
 
         aggregated_df = agg.aggregate(freq=freq)

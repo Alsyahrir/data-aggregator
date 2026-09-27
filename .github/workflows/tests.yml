@@ -25,8 +25,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install solstice with all extras
-        run: pip install -e ".[all,dev]"
+      - name: Install solstice with all extras (incl. the web backend deps)
+        run: pip install -e ".[all,dev,web]"
 
       - name: Run tests
         run: pytest tests/ -v
