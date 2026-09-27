@@ -83,6 +83,11 @@ async function parseErrorResponse(res) {
   }
 }
 
+// Distinct hues for per-source series; cycled so any number of inverters works.
+const MIN_FORECAST_DAYS = 60;
+
+const SERIES_COLORS = ['#e8a051', '#5ea3db', '#52b788', '#e06d75', '#b191d9', '#4fc3c3', '#d98e5a', '#8fa3b8'];
+
 const KEY_PLACEHOLDER = {
   groq: 'gsk_...',
   openai: 'sk-...',
@@ -101,6 +106,14 @@ const fieldStyle = (width) => ({
   outline: 'none',
 });
 
+// Long floats make the table unreadable; timestamps are already ISO strings.
+const formatCell = (v) => {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'boolean') return v ? 'yes' : 'no';
+  if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(3);
+  return String(v);
+};
+
 const SCHEMA_FIELDS = [
   { name: 'timestamp', req: true, unit: 'ISO / Date', desc: 'Date and time of record' },
   { name: 'energy', req: false, unit: 'kWh / MWh', desc: 'Solar generation yield' },
@@ -118,6 +131,7 @@ export default function SolsticePage() {
   const [loadingMsg, setLoadingMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [warnings, setWarnings] = useState([]);
+  const [anomaliesOnly, setAnomaliesOnly] = useState(false);
 
   // Step 1: Upload & Detect State
   const [uploadedFiles, setUploadedFiles] = useState([]);
@@ -202,6 +216,37 @@ export default function SolsticePage() {
     formData.append('anomaly_method', anomalyMethod);
     formData.append('anomaly_strategy', anomalyStrategy);
     return formData;
+  };
+
+  const removeFile = (name) => {
+    const remaining = uploadedFiles.filter((f) => f.name !== name);
+    if (remaining.length === 0) {
+      resetAll();
+      return;
+    }
+    setUploadedFiles(remaining);
+    setDetectionResults((prev) => prev.filter((d) => d.filename !== name));
+    setMappings((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+    // Any previous result was computed from the old file set.
+    setProcessedData(null);
+    setForecastData(null);
+    setWeatherEnriched(false);
+  };
+
+  const resetAll = () => {
+    setUploadedFiles([]);
+    setDetectionResults([]);
+    setMappings({});
+    setProcessedData(null);
+    setForecastData(null);
+    setWeatherEnriched(false);
+    setWarnings([]);
+    setErrorMsg('');
+    setActiveStep(1);
   };
 
   // Call /api/detect
@@ -463,6 +508,51 @@ export default function SolsticePage() {
     }
   };
 
+  // Per-column anomaly flags are an implementation detail of the cleaning
+  // pass; the single is_anomaly column is the part worth showing.
+  const visibleColumns = useMemo(
+    () => (processedData?.columns || []).filter((c) => !c.startsWith('_anomaly_')),
+    [processedData]
+  );
+
+  const tableRows = useMemo(() => {
+    const rows = processedData?.records || [];
+    return anomaliesOnly ? rows.filter((r) => r.is_anomaly) : rows;
+  }, [processedData, anomaliesOnly]);
+
+  const useMyLocation = () => {
+    if (!navigator.geolocation) {
+      setErrorMsg('This browser does not expose a location API.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLat(pos.coords.latitude.toFixed(4));
+        setLon(pos.coords.longitude.toFixed(4));
+      },
+      () => setErrorMsg('Location permission denied — enter the coordinates manually.')
+    );
+  };
+
+  // The forecaster resamples to daily and splits chronologically, so a handful
+  // of days trains on almost nothing and scores meaninglessly.
+  const forecastReady = useMemo(() => {
+    const rows = processedData?.records || [];
+    if (!rows.length) return { ok: false, reason: 'Run the aggregation pipeline first.' };
+    if (!rows.some((r) => r.energy !== null && r.energy !== undefined)) {
+      return { ok: false, reason: 'Forecasting needs an energy column — none was mapped.' };
+    }
+    const days = new Set(rows.map((r) => String(r.timestamp).slice(0, 10))).size;
+    if (days < MIN_FORECAST_DAYS) {
+      return {
+        ok: false,
+        days,
+        reason: `Only ${days} day${days === 1 ? '' : 's'} of data — the forecaster needs at least ${MIN_FORECAST_DAYS} to train and evaluate meaningfully.`,
+      };
+    }
+    return { ok: true, days };
+  }, [processedData]);
+
   // Build Time-Series Chart Data
   const timeSeriesChartData = useMemo(() => {
     if (!processedData || !processedData.records || processedData.records.length === 0) {
@@ -470,39 +560,59 @@ export default function SolsticePage() {
     }
 
     const records = processedData.records;
-    const labels = records.map((r) => {
-      const d = new Date(r.timestamp);
-      return isNaN(d.getTime()) ? r.timestamp : d.toLocaleDateString();
-    });
 
-    const energyValues = records.map((r) => r.energy ?? null);
-    const irradianceValues = records.map((r) => r.irradiance ?? null);
+    // Records arrive grouped by source_id, so plotting them in array order
+    // drew every inverter as one continuous line that jumped back in time
+    // at each source boundary. Pivot to a shared time axis with one series
+    // per source instead.
+    const sources = [...new Set(records.map((r) => r.source_id ?? 'DATA'))];
+    const times = [...new Set(records.map((r) => r.timestamp))].sort();
+    const labelFor = (t) => {
+      const d = new Date(t);
+      return isNaN(d.getTime()) ? t : d.toLocaleDateString();
+    };
+    const timeIndex = new Map(times.map((t, i) => [t, i]));
 
+    const bySource = new Map(sources.map((sid) => [sid, new Array(times.length).fill(null)]));
+    const irradianceByTime = new Array(times.length).fill(null);
+    let hasIrradiance = false;
+    for (const r of records) {
+      const i = timeIndex.get(r.timestamp);
+      if (i === undefined) continue;
+      bySource.get(r.source_id ?? 'DATA')[i] = r.energy ?? null;
+      if (r.irradiance !== undefined && r.irradiance !== null) {
+        irradianceByTime[i] = r.irradiance;
+        hasIrradiance = true;
+      }
+    }
+
+    const single = sources.length === 1;
     return {
-      labels,
+      labels: times.map(labelFor),
       datasets: [
-        {
-          label: 'Energy (kWh)',
-          data: energyValues,
-          borderColor: '#e8a051',
-          backgroundColor: 'rgba(232, 160, 81, 0.15)',
-          fill: true,
+        ...sources.map((sid, i) => ({
+          label: single ? 'Energy (kWh)' : `${sid} (kWh)`,
+          data: bySource.get(sid),
+          borderColor: SERIES_COLORS[i % SERIES_COLORS.length],
+          backgroundColor: single ? 'rgba(232, 160, 81, 0.15)' : 'transparent',
+          fill: single,
           tension: 0.25,
-          pointRadius: records.length > 60 ? 0 : 3,
+          pointRadius: times.length > 60 ? 0 : 3,
           pointHoverRadius: 6,
-          pointBackgroundColor: '#f5c27f',
+          spanGaps: true,
           yAxisID: 'y',
-        },
-        ...(records[0]?.irradiance !== undefined
+        })),
+        ...(hasIrradiance
           ? [
               {
                 label: 'Solar Irradiance (W/m²)',
-                data: irradianceValues,
+                data: irradianceByTime,
                 borderColor: '#5ea3db',
                 backgroundColor: 'transparent',
                 borderDash: [5, 5],
                 tension: 0.2,
                 pointRadius: 0,
+                spanGaps: true,
                 yAxisID: 'y1',
               },
             ]
@@ -560,20 +670,40 @@ export default function SolsticePage() {
         </div>
       </nav>
 
-      {/* ── Hero Banner ───────────────────────────────────────── */}
-      <header className="hero">
-        <div className="hero-glow-1" />
-        <div className="hero-glow-2" />
-        <div className="hero-pill">
-          <Sparkles size={14} /> Intelligent Solar Data Pipeline
+      {/* ── Hero Banner ───────────────────────────────────────────
+           Full size only while the canvas is empty. Once files are
+           loaded it would cost ~420px of scroll on every screen for
+           text the user has already read, so it collapses away. */}
+      {uploadedFiles.length === 0 ? (
+        <header className="hero">
+          <div className="hero-glow-1" />
+          <div className="hero-glow-2" />
+          <div className="hero-pill">
+            <Sparkles size={14} /> Intelligent Solar Data Pipeline
+          </div>
+          <h1 className="hero-title">Harmonize &amp; Forecast Solar Energy</h1>
+          <p className="hero-desc">
+            Drop in raw multi-inverter and environmental files. We automatically map columns,
+            align timestamps, filter anomalies, enrich with Open-Meteo weather, and forecast yields
+            with Random Forest ML.
+          </p>
+        </header>
+      ) : (
+        <div className="hero-collapsed">
+          <div>
+            <span className="hero-collapsed-title">Harmonize &amp; Forecast Solar Energy</span>
+            <span className="hero-collapsed-meta">
+              {uploadedFiles.length} file{uploadedFiles.length === 1 ? '' : 's'}
+              {processedData?.summary?.total_rows
+                ? ` · ${Number(processedData.summary.total_rows).toLocaleString()} rows aggregated`
+                : ''}
+            </span>
+          </div>
+          <button className="btn btn-secondary" style={{ fontSize: '0.78rem', padding: '5px 12px' }} onClick={resetAll}>
+            Start over
+          </button>
         </div>
-        <h1 className="hero-title">Harmonize &amp; Forecast Solar Energy</h1>
-        <p className="hero-desc">
-          Drop in raw multi-inverter and environmental files. We automatically map columns,
-          align timestamps, filter anomalies, enrich with Open-Meteo weather, and forecast yields
-          with Random Forest ML.
-        </p>
-      </header>
+      )}
 
       {/* ── Stepper Navigation ────────────────────────────────── */}
       <div className="steps-nav">
@@ -798,6 +928,47 @@ export default function SolsticePage() {
               />
             </div>
           </div>
+
+          {/* Loaded files — removable, so a wrong drop doesn't mean
+              starting the whole run over. */}
+          {uploadedFiles.length > 0 && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '1rem' }}>
+              {uploadedFiles.map((f) => (
+                <span
+                  key={f.name}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '5px 8px 5px 12px',
+                    borderRadius: '999px',
+                    border: '1px solid var(--border-subtle)',
+                    background: 'rgba(18, 22, 32, 0.6)',
+                    fontSize: '0.8rem',
+                  }}
+                >
+                  <span>{f.name}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{(f.size / 1e6).toFixed(2)} MB</span>
+                  <button
+                    onClick={() => removeFile(f.name)}
+                    aria-label={`Remove ${f.name}`}
+                    title={`Remove ${f.name}`}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--text-muted)',
+                      cursor: 'pointer',
+                      fontSize: '1rem',
+                      lineHeight: 1,
+                      padding: '0 2px',
+                    }}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
 
           {/* Detection Results */}
           {detectionResults.length > 0 && (
@@ -1109,6 +1280,82 @@ export default function SolsticePage() {
             </div>
           )}
 
+          {/* Result table — until now the aggregated rows were only ever
+              visible as a chart line, with no way to read actual values. */}
+          {processedData.records?.length > 0 && (
+            <div className="card">
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '0.6rem',
+                  marginBottom: '0.9rem',
+                }}
+              >
+                <div>
+                  <h3 className="chart-title">Aggregated Data</h3>
+                  <p className="chart-sub">
+                    {processedData.summary?.truncated
+                      ? `First ${Number(processedData.summary.returned_rows).toLocaleString()} of ${Number(
+                          processedData.summary.total_rows
+                        ).toLocaleString()} rows — export for the complete set`
+                      : `${Number(processedData.records.length).toLocaleString()} rows · ${
+                          processedData.columns?.length ?? 0
+                        } columns`}
+                  </p>
+                </div>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '0.8rem',
+                    color: 'var(--text-muted)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={anomaliesOnly}
+                    onChange={(e) => setAnomaliesOnly(e.target.checked)}
+                  />
+                  Anomalies only
+                </label>
+              </div>
+
+              <div className="table-wrap table-scroll">
+                <table className="custom-table">
+                  <thead>
+                    <tr>
+                      {visibleColumns.map((c) => (
+                        <th key={c}>{c}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableRows.map((r, i) => (
+                      <tr key={i} style={r.is_anomaly ? { background: 'rgba(224,109,117,0.07)' } : undefined}>
+                        {visibleColumns.map((c) => (
+                          <td key={c} style={{ whiteSpace: 'nowrap' }}>
+                            {formatCell(r[c])}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {tableRows.length === 0 && (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.8rem' }}>
+                  No anomalous rows in this result.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Enriched & Forecast Callout */}
           <div
             className="card"
@@ -1152,7 +1399,9 @@ export default function SolsticePage() {
             </div>
             <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
               Fetches historical temperature, clearness index, sunshine duration, and solar radiation
-              for your array's geographical location.
+              for your array's geographical location. These coordinates decide which weather is
+              joined to your data, so set them to where the panels physically are — the default is
+              Singapore.
             </p>
 
             <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
@@ -1194,6 +1443,15 @@ export default function SolsticePage() {
                 <CloudSun size={16} /> Fetch Weather Data
               </button>
 
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: '0.8rem', padding: '6px 12px' }}
+                onClick={useMyLocation}
+                title="Use this browser's location"
+              >
+                Use my location
+              </button>
+
               {weatherEnriched && (
                 <span style={{ fontSize: '0.82rem', color: '#52b788', display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <CheckCircle2 size={16} /> Weather Features Synced!
@@ -1202,11 +1460,32 @@ export default function SolsticePage() {
             </div>
           </div>
 
-          {/* Forecasting Trigger */}
+          {/* Forecasting Trigger — the model trains on daily totals and needs a
+              reasonable run of them, so say so up front rather than letting the
+              request fail or return a meaningless R². */}
           <div style={{ textAlign: 'center', margin: '2rem 0' }}>
-            <button className="btn btn-primary" style={{ padding: '0.9rem 2.5rem' }} onClick={runForecast}>
+            <button
+              className="btn btn-primary"
+              style={{ padding: '0.9rem 2.5rem', opacity: forecastReady.ok ? 1 : 0.5 }}
+              onClick={runForecast}
+              disabled={!forecastReady.ok}
+              title={forecastReady.ok ? '' : forecastReady.reason}
+            >
               <TrendingUp size={20} /> Train Random Forest Forecaster
             </button>
+            <p
+              style={{
+                fontSize: '0.82rem',
+                color: forecastReady.ok ? 'var(--text-muted)' : '#e8a051',
+                marginTop: '0.7rem',
+              }}
+            >
+              {forecastReady.ok
+                ? `Training on ${forecastReady.days} daily observations${
+                    weatherEnriched ? ', including the fetched weather features' : ''
+                  }.`
+                : forecastReady.reason}
+            </p>
           </div>
 
           {/* Forecast Results */}

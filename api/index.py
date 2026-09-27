@@ -169,6 +169,10 @@ def sanitize_val(val: Any) -> Any:
         if np.isneginf(val) or np.isposinf(val) or np.isnan(val):
             return None
         return round(float(val), 4)
+    # bool is a subclass of int, so this must come first or True/False
+    # silently become 1/0 in every response and export.
+    if isinstance(val, (bool, np.bool_)):
+        return bool(val)
     if isinstance(val, (np.integer, int)):
         return int(val)
     if isinstance(val, (pd.Timestamp, np.datetime64)):

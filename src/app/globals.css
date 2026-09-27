@@ -158,6 +158,35 @@ h1, h2, h3, h4, .font-title {
   box-shadow: var(--shadow-card);
 }
 
+/* Compact stand-in for .hero once files are loaded — keeps the app's identity
+   on screen without spending 420px of scroll on copy already read. */
+.hero-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.85rem 1.35rem;
+  margin-bottom: 1.5rem;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(180deg, rgba(22, 28, 42, 0.45) 0%, rgba(12, 14, 18, 0.2) 100%);
+  border: 1px solid var(--border-card);
+}
+
+.hero-collapsed-title {
+  font-family: var(--font-title, inherit);
+  font-size: 1.02rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-right: 0.7rem;
+}
+
+.hero-collapsed-meta {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
 .hero-glow-1 {
   position: absolute;
   top: -60px;
@@ -719,6 +748,27 @@ h1, h2, h3, h4, .font-title {
 }
 
 /* ── Table Styling ────────────────────────────────────────────────────────── */
+
+.steps-nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  padding: 0.5rem 0;
+  background: linear-gradient(180deg, var(--bg-main) 72%, transparent 100%);
+}
+
+/* Keeps a long result table from pushing the page to absurd heights;
+   the header stays put while the rows scroll under it. */
+.table-scroll {
+  max-height: 460px;
+  overflow: auto;
+}
+
+.table-scroll .custom-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
 
 .table-wrap {
   width: 100%;
